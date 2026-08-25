@@ -207,3 +207,28 @@ Scores are stored per `(flow_id, model_version_id)`, so switching the
 active model changes which scores are displayed without destroying any
 other model's. Retraining always inserts new versions and never updates
 existing ones — no model is ever silently replaced.
+
+---
+
+## Known test gap: `missed_by_model` is unexercised against real data
+
+Phase 4's verdict feedback loop can capture a false negative — a flow the
+analyst confirms is genuinely anomalous that the active model did not flag
+(verdict `true_positive` with `is_anomalous = false`, surfaced as
+`missed_by_model` in `GET /api/verdicts/summary`) — and this path has unit
+test coverage. But it has never actually fired against real data: the
+shipped `behavioural_only` model doesn't miss a single real scan flow in
+`capture_scan_nmap_lan.pcapng` (see "Evidence the behavioural signal is
+path-independent" above — 99.07–100 on every genuine scan flow in this
+capture). Only the unshipped `primary` (13-feature) variant misses scan
+flows at its committed threshold, and it's not active.
+
+So `missed_by_model` is code-verified but not yet analyst-verified against
+a live false negative. **Planned check, not done now:** as part of Phase
+12's adversarial testing, temporarily activate the `primary` model
+(`set_active_model_version`, above), mark a genuine false-negative verdict
+against one of the scan flows it misses, confirm `missed_by_model`
+increments correctly in `GET /api/verdicts/summary`, then switch back to
+`behavioural_only` as the real shipped model. Re-marking a verdict is
+already idempotent (upsert on `flow_id`), so this is safe to do against
+live data and revert without leaving stray rows behind.
