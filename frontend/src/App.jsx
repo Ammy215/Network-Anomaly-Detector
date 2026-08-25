@@ -116,6 +116,7 @@ function App() {
           <table className="w-full text-left text-sm font-mono border-collapse">
             <thead>
               <tr className="border-b border-slate-800 text-slate-400">
+                <th className="py-1 pr-4">#</th>
                 <th className="py-1 pr-4">Source</th>
                 <th className="py-1 pr-4">Destination</th>
                 <th className="py-1 pr-4">Protocol</th>
@@ -134,13 +135,14 @@ function App() {
             <tbody>
               {flows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-3 text-slate-500">
+                  <td colSpan={12} className="py-3 text-slate-500">
                     No flows yet — upload a .pcap to see results.
                   </td>
                 </tr>
               ) : (
                 flows.map((flow) => (
                   <tr key={flow.id} className="border-b border-slate-900">
+                    <td className="py-1 pr-4 text-slate-500">{flow.seq}</td>
                     <td className="py-1 pr-4">
                       {flow.src_ip}:{flow.src_port ?? '-'}
                     </td>

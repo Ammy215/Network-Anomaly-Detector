@@ -130,3 +130,45 @@ alter table model_versions add column if not exists is_active boolean not null d
 -- application code to maintain it.
 create unique index if not exists model_versions_one_active_idx
   on model_versions (is_active) where is_active = true;
+
+-- NetSentinel — Phase 3.1: stable flow sequence number
+-- Run once in the Supabase SQL editor. Idempotent -- safe to re-run.
+--
+-- The UUID primary key has no order of its own, so there was no stable,
+-- permanent row number for the flows table -- the UI could only show
+-- insertion-sensitive things like started_at. This adds a real bigint
+-- identity column, backed by a sequence, that never changes once assigned.
+
+create sequence if not exists flows_seq_seq;
+
+alter table flows add column if not exists seq bigint;
+
+-- Backfill rows that existed before this column did. created_at was set
+-- at insert time, so ordering by it (with id as a tiebreaker for equal
+-- timestamps) reconstructs true insertion order for the backfill.
+update flows set seq = ordered.rn
+from (
+  select id, row_number() over (order by created_at asc, id asc) as rn
+  from flows
+  where seq is null
+) as ordered
+where flows.id = ordered.id;
+
+-- Advance the sequence past the backfilled values so new inserts continue
+-- the numbering instead of colliding with it.
+select setval('flows_seq_seq', coalesce((select max(seq) from flows), 0));
+
+alter table flows alter column seq set default nextval('flows_seq_seq');
+alter table flows alter column seq set not null;
+alter sequence flows_seq_seq owned by flows.seq;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'flows_seq_unique'
+  ) then
+    alter table flows add constraint flows_seq_unique unique (seq);
+  end if;
+end $$;
+
+create index if not exists flows_seq_idx on flows (seq);
