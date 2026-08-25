@@ -1,6 +1,29 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
+import FlowDetailPanel from './components/FlowDetailPanel'
+import VerdictSummary from './components/VerdictSummary'
+import { severityBand } from './severity'
 
 const API_BASE_URL = 'http://localhost:8000'
+
+const VERDICT_LABELS = {
+  true_positive: 'TP',
+  false_positive: 'FP',
+  benign: 'Benign',
+  unknown: 'Unknown',
+}
+
+function verdictBadge(flow) {
+  if (!flow.verdict) {
+    return <span className="text-slate-600">—</span>
+  }
+  const missed = flow.verdict.value === 'true_positive' && flow.is_anomalous === false
+  return (
+    <span className={missed ? 'text-amber-400' : 'text-slate-300'}>
+      {VERDICT_LABELS[flow.verdict.value] ?? flow.verdict.value}
+      {missed ? ' · missed' : ''}
+    </span>
+  )
+}
 
 function App() {
   const [health, setHealth] = useState('loading')
@@ -14,6 +37,9 @@ function App() {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const [uploadMessage, setUploadMessage] = useState(null)
+
+  const [expandedFlowId, setExpandedFlowId] = useState(null)
+  const [verdictSummary, setVerdictSummary] = useState(null)
 
   function loadFlows() {
     setFlowsError(null)
@@ -29,6 +55,16 @@ function App() {
       .catch((err) => setFlowsError(err.message))
   }
 
+  function loadVerdictSummary() {
+    fetch(`${API_BASE_URL}/api/verdicts/summary`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Request failed: ${res.status}`)
+        return res.json()
+      })
+      .then(setVerdictSummary)
+      .catch(() => setVerdictSummary(null))
+  }
+
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/health`)
       .then((res) => {
@@ -39,6 +75,7 @@ function App() {
       .catch((err) => setHealthError(err.message))
 
     loadFlows()
+    loadVerdictSummary()
   }, [])
 
   function handleUpload(e) {
@@ -66,11 +103,33 @@ function App() {
       .finally(() => setUploading(false))
   }
 
+  function handleVerdictSaved(flowId, verdictRow) {
+    setFlows((prev) =>
+      prev.map((flow) =>
+        flow.id === flowId
+          ? {
+              ...flow,
+              verdict: {
+                value: verdictRow.verdict,
+                note: verdictRow.note,
+                created_by: verdictRow.created_by,
+                created_at: verdictRow.created_at,
+                updated_at: verdictRow.updated_at,
+              },
+            }
+          : flow
+      )
+    )
+    loadVerdictSummary()
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 p-6 flex flex-col gap-6">
       <div>
         <h1 className="text-2xl font-semibold">NetSentinel</h1>
-        <p className="text-sm text-slate-400">Phase 3 — flows → features → anomaly scores</p>
+        <p className="text-sm text-slate-400">
+          Phase 4 — score transparency & verdict feedback
+        </p>
       </div>
 
       <div className="rounded-md border border-slate-800 bg-slate-900 px-4 py-3 font-mono text-sm w-fit">
@@ -102,13 +161,16 @@ function App() {
       {uploadError && <p className="text-sm text-red-400">{uploadError}</p>}
       {uploadMessage && <p className="text-sm text-green-400">{uploadMessage}</p>}
 
+      <VerdictSummary summary={verdictSummary} />
+
       <div>
         <h2 className="text-lg font-medium mb-2">Flows</h2>
         {scoredBy && (
           <p className="text-xs text-slate-500 mb-2 font-mono">
             scores from {scoredBy.algorithm} ({scoredBy.variant}), threshold{' '}
             {scoredBy.threshold.toFixed(4)} — other trained models score these
-            same flows differently; see /api/models
+            same flows differently; see /api/models. Severity is a derived label
+            over the score, not a separate measurement.
           </p>
         )}
         {flowsError && <p className="text-sm text-red-400">{flowsError}</p>}
@@ -119,6 +181,7 @@ function App() {
                 <th className="py-1 pr-4">#</th>
                 <th className="py-1 pr-4">Source</th>
                 <th className="py-1 pr-4">Destination</th>
+                <th className="py-1 pr-4">Dst Port</th>
                 <th className="py-1 pr-4">Protocol</th>
                 <th className="py-1 pr-4">Packets</th>
                 <th className="py-1 pr-4">Bytes</th>
@@ -128,44 +191,81 @@ function App() {
                 <th className="py-1 pr-4">
                   Score{scoredBy ? ` (${scoredBy.algorithm})` : ''}
                 </th>
+                <th className="py-1 pr-4">Severity</th>
                 <th className="py-1 pr-4">Top Contributing Features</th>
                 <th className="py-1 pr-4">Started</th>
+                <th className="py-1 pr-4">Verdict</th>
               </tr>
             </thead>
             <tbody>
               {flows.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="py-3 text-slate-500">
+                  <td colSpan={15} className="py-3 text-slate-500">
                     No flows yet — upload a .pcap to see results.
                   </td>
                 </tr>
               ) : (
-                flows.map((flow) => (
-                  <tr key={flow.id} className="border-b border-slate-900">
-                    <td className="py-1 pr-4 text-slate-500">{flow.seq}</td>
-                    <td className="py-1 pr-4">
-                      {flow.src_ip}:{flow.src_port ?? '-'}
-                    </td>
-                    <td className="py-1 pr-4">
-                      {flow.dst_ip}:{flow.dst_port ?? '-'}
-                    </td>
-                    <td className="py-1 pr-4">{flow.protocol}</td>
-                    <td className="py-1 pr-4">{flow.packet_count}</td>
-                    <td className="py-1 pr-4">{flow.byte_count}</td>
-                    <td className="py-1 pr-4">{flow.packets_per_second?.toFixed(1) ?? '-'}</td>
-                    <td className="py-1 pr-4">{flow.avg_packet_size?.toFixed(0) ?? '-'}</td>
-                    <td className="py-1 pr-4">{flow.close_type ?? '-'}</td>
-                    <td className={`py-1 pr-4 ${flow.is_anomalous ? 'text-amber-400' : ''}`}>
-                      {flow.anomaly_score != null ? flow.anomaly_score.toFixed(0) : '-'}
-                    </td>
-                    <td className="py-1 pr-4 text-slate-400">
-                      {flow.top_features?.length
-                        ? flow.top_features.map((f) => f.feature).join(', ')
-                        : '-'}
-                    </td>
-                    <td className="py-1 pr-4">{new Date(flow.started_at).toLocaleString()}</td>
-                  </tr>
-                ))
+                flows.map((flow) => {
+                  const sev = severityBand(flow.anomaly_score, flow.is_anomalous)
+                  const isExpanded = expandedFlowId === flow.id
+                  return (
+                    <Fragment key={flow.id}>
+                      <tr className="border-b border-slate-900">
+                        <td className="py-1 pr-4 text-slate-500">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedFlowId(isExpanded ? null : flow.id)}
+                            className="hover:text-cyan-400"
+                          >
+                            {isExpanded ? '▾' : '▸'} {flow.seq}
+                          </button>
+                        </td>
+                        <td className="py-1 pr-4">
+                          {flow.src_ip}:{flow.src_port ?? '-'}
+                        </td>
+                        <td className="py-1 pr-4">
+                          {flow.dst_ip}:{flow.dst_port ?? '-'}
+                        </td>
+                        <td className="py-1 pr-4">{flow.dst_port ?? '-'}</td>
+                        <td className="py-1 pr-4">{flow.protocol}</td>
+                        <td className="py-1 pr-4">{flow.packet_count}</td>
+                        <td className="py-1 pr-4">{flow.byte_count}</td>
+                        <td className="py-1 pr-4">{flow.packets_per_second?.toFixed(1) ?? '-'}</td>
+                        <td className="py-1 pr-4">{flow.avg_packet_size?.toFixed(0) ?? '-'}</td>
+                        <td className="py-1 pr-4">{flow.close_type ?? '-'}</td>
+                        <td className={`py-1 pr-4 ${flow.is_anomalous ? 'text-amber-400' : ''}`}>
+                          {flow.anomaly_score != null ? flow.anomaly_score.toFixed(0) : '-'}
+                        </td>
+                        <td className={`py-1 pr-4 ${sev.color}`} title={sev.detail}>
+                          {sev.label}
+                        </td>
+                        <td className="py-1 pr-4 text-slate-400">
+                          {flow.top_features?.length
+                            ? flow.top_features
+                                .filter((f) => f.contribution > 0)
+                                .slice(0, 3)
+                                .map((f) => f.feature)
+                                .join(', ') || '-'
+                            : '-'}
+                        </td>
+                        <td className="py-1 pr-4">{new Date(flow.started_at).toLocaleString()}</td>
+                        <td className="py-1 pr-4">{verdictBadge(flow)}</td>
+                      </tr>
+                      {isExpanded && (
+                        <tr className="border-b border-slate-900">
+                          <td colSpan={15} className="py-3">
+                            <FlowDetailPanel
+                              flow={flow}
+                              scoredBy={scoredBy}
+                              apiBaseUrl={API_BASE_URL}
+                              onVerdictSaved={handleVerdictSaved}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })
               )}
             </tbody>
           </table>

@@ -361,7 +361,7 @@ def score_and_store(bundle: ModelBundle, version_id: str, flows: list[dict]) -> 
     raw = raw_scores(bundle, matrix)
     scores = to_anomaly_score(bundle, raw)
     flags = is_anomalous(bundle, raw)
-    contributions = explain(bundle, matrix)
+    contributions = explain(bundle, matrix, top_n=None, positive_only=False)
 
     rows = [{
         "flow_id": flow["id"],

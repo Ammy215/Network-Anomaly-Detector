@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import models, pcap
+from app.routers import models, pcap, verdicts
 
 app = FastAPI(title="NetSentinel API")
 
@@ -16,6 +16,7 @@ app.add_middleware(
 
 app.include_router(pcap.router)
 app.include_router(models.router)
+app.include_router(verdicts.router)
 
 
 @app.get("/api/health")

@@ -88,7 +88,32 @@ def is_anomalous(bundle: ModelBundle, raw: np.ndarray) -> np.ndarray:
     return raw < bundle.threshold
 
 
-def explain(bundle: ModelBundle, matrix: np.ndarray, top_n: int = 3) -> list[list[dict]]:
+def _raw_baseline_values(bundle: ModelBundle) -> np.ndarray:
+    """The training-typical value per feature, in the same (unscaled) units
+    as `matrix` -- i.e. `bundle.training_medians_scaled` run back through
+    the scaler's inverse. Same shape as one row of `matrix`.
+    """
+    return bundle.scaler.inverse_transform(
+        bundle.training_medians_scaled.reshape(1, -1)
+    )[0]
+
+
+def _display_value(feature_name: str, raw_value: float) -> float:
+    """Undoes feature_matrix.py's log1p for the 5 NUMERIC_FEATURES so a
+    duration/rate/size shows in real units, not a log-compressed number.
+    One-hot/boolean features pass through unchanged.
+    """
+    if feature_name in NUMERIC_FEATURES:
+        return float(np.expm1(raw_value))
+    return float(raw_value)
+
+
+def explain(
+    bundle: ModelBundle,
+    matrix: np.ndarray,
+    top_n: int | None = 3,
+    positive_only: bool = True,
+) -> list[list[dict]]:
     """Occlusion attribution: which features actually drove each score.
 
     For each feature, substitute the training median and re-score. If the
@@ -102,6 +127,18 @@ def explain(bundle: ModelBundle, matrix: np.ndarray, top_n: int = 3) -> list[lis
     linked), occluding one alone understates its importance, because the
     others still carry the same signal. Attribution here is indicative,
     not a rigorous Shapley decomposition.
+
+    Every entry also carries `flow_value` (this flow's actual value, read
+    straight off `matrix` before scaling) and `baseline_value` (the
+    training-typical value) so a caller can show *why* a feature mattered,
+    not just that it did -- and so the claim is checkable against the
+    flow's own raw data, not just the model's math.
+
+    `top_n=None` returns every feature. `positive_only=False` also returns
+    features that pushed the flow *towards* normal (negative contribution)
+    -- useful for showing the full picture, e.g. why a borderline flow
+    wasn't flagged. Defaults reproduce the original top-3/positive-only
+    behavior exactly.
     """
     scaled = bundle.scaler.transform(matrix)
     baseline_raw = bundle.model.decision_function(scaled)
@@ -120,39 +157,35 @@ def explain(bundle: ModelBundle, matrix: np.ndarray, top_n: int = 3) -> list[lis
     # normal => that feature was pushing it towards anomalous.
     deltas = occluded_raw - baseline_raw[:, None]
 
+    baseline_values = _raw_baseline_values(bundle)
+
     results = []
     for sample_index in range(n_samples):
-        order = np.argsort(-deltas[sample_index])[:top_n]
+        order = np.argsort(-deltas[sample_index])
+        if positive_only:
+            order = [i for i in order if deltas[sample_index][i] > 0]
+        if top_n is not None:
+            order = order[:top_n]
         results.append([
             {
                 "feature": bundle.feature_names[i],
                 "contribution": round(float(deltas[sample_index][i]), 6),
+                "flow_value": round(_display_value(bundle.feature_names[i], matrix[sample_index, i]), 6),
+                "baseline_value": round(_display_value(bundle.feature_names[i], baseline_values[i]), 6),
             }
             for i in order
-            if deltas[sample_index][i] > 0
         ])
     return results
 
 
-def describe_deviation(flow: dict, baselines: dict) -> list[str]:
-    """Human-readable context to sit alongside the numeric attribution.
+def score_flows(bundle: ModelBundle, flows: list[dict]) -> list[dict]:
+    """Full scoring pass for a list of flow dicts.
 
-    `baselines` maps a numeric feature name to its median in the training
-    set, so the analyst sees "50.0 vs typical 107.0" rather than a bare
-    contribution number with no frame of reference.
+    `top_features` stores the FULL signed per-feature breakdown (every
+    feature, both directions) -- the compact "top 3" view shown in a flows
+    table is a display-time filter over this, not a separate computation,
+    so there is only ever one stored explanation per flow.
     """
-    notes = []
-    for name in NUMERIC_FEATURES:
-        value = flow.get(name)
-        median = baselines.get(name)
-        if value is None or median is None:
-            continue
-        notes.append(f"{name}={value:.6g} (baseline median {median:.6g})")
-    return notes
-
-
-def score_flows(bundle: ModelBundle, flows: list[dict], top_n: int = 3) -> list[dict]:
-    """Full scoring pass for a list of flow dicts."""
     if not flows:
         return []
     matrix = build_feature_matrix(flows)
@@ -164,7 +197,7 @@ def score_flows(bundle: ModelBundle, flows: list[dict], top_n: int = 3) -> list[
     raw = raw_scores(bundle, matrix)
     scores = to_anomaly_score(bundle, raw)
     flags = is_anomalous(bundle, raw)
-    contributions = explain(bundle, matrix, top_n=top_n)
+    contributions = explain(bundle, matrix, top_n=None, positive_only=False)
 
     return [
         {

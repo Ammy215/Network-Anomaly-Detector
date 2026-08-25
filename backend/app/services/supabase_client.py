@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 
 from supabase import Client, create_client
@@ -10,6 +10,12 @@ FLOW_FEATURES_TABLE = "flow_features"
 HOST_PROFILES_TABLE = "host_profiles"
 MODEL_VERSIONS_TABLE = "model_versions"
 FLOW_SCORES_TABLE = "flow_scores"
+FLOW_VERDICTS_TABLE = "flow_verdicts"
+
+# Mirrors the flow_verdicts.verdict CHECK constraint in supabase_schema.sql
+# -- kept here too so the API can reject an invalid value with a clean 422
+# instead of a raw Postgres constraint-violation error.
+VALID_VERDICTS = ("true_positive", "false_positive", "benign", "unknown")
 
 
 @lru_cache
@@ -78,11 +84,11 @@ def list_flows(limit: int = 500) -> list[dict]:
     so the table still renders before any model has been trained.
     """
     rows = [
-        _flatten_features(row)
+        _nest_verdict(_flatten_features(row))
         for row in (
             get_client()
             .table(FLOWS_TABLE)
-            .select("*, flow_features(*)")
+            .select("*, flow_features(*), flow_verdicts(*)")
             .order("started_at", desc=True)
             .limit(limit)
             .execute()
@@ -284,3 +290,102 @@ def _flatten_features(row: dict) -> dict:
         embedded.pop("flow_id", None)
         row.update(embedded)
     return row
+
+
+def _nest_verdict(row: dict) -> dict:
+    """Unlike flow_features, this is kept as a nested `verdict` object,
+    not flattened -- flow_verdicts.created_at would otherwise silently
+    overwrite the flow's own created_at (insert timestamp) on the same
+    key. `row["verdict"]` is None when no analyst has judged this flow yet.
+    """
+    embedded = row.pop("flow_verdicts", None)
+    if isinstance(embedded, list):
+        embedded = embedded[0] if embedded else None
+    row["verdict"] = (
+        {
+            "value": embedded["verdict"],
+            "note": embedded.get("note"),
+            "created_by": embedded.get("created_by"),
+            "created_at": embedded.get("created_at"),
+            "updated_at": embedded.get("updated_at"),
+        }
+        if embedded
+        else None
+    )
+    return row
+
+
+def flow_exists(flow_id: str) -> bool:
+    result = get_client().table(FLOWS_TABLE).select("id").eq("id", flow_id).limit(1).execute()
+    return bool(result.data)
+
+
+def upsert_flow_verdict(flow_id: str, verdict: str, note: str | None, created_by: str) -> dict:
+    """One row per flow -- upsert on flow_id, so re-marking a flow
+    overwrites its existing verdict rather than creating a duplicate.
+
+    `created_at` is deliberately never included in this payload: Postgrest
+    only overwrites the columns present in an upsert, so on a re-mark the
+    original insert timestamp is left untouched; the column default only
+    ever fires on first insert.
+    """
+    row = {
+        "flow_id": flow_id,
+        "verdict": verdict,
+        "note": note,
+        "created_by": created_by,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = (
+        get_client()
+        .table(FLOW_VERDICTS_TABLE)
+        .upsert(row, on_conflict="flow_id")
+        .execute()
+    )
+    return result.data[0] if result.data else {}
+
+
+def get_verdict_summary() -> dict:
+    """Counts for the analyst-facing summary panel.
+
+    `missed_by_model` is the count that matters most here: verdict =
+    true_positive (the analyst's ground-truth judgement, independent of
+    whether the model flagged it) where the active model's is_anomalous
+    is false -- i.e. a flow the analyst confirms is genuinely anomalous
+    that the model did not flag. This is computed by joining against the
+    *current* active model's scores, not a stored snapshot, so it always
+    reflects whichever model is shipped right now.
+    """
+    client = get_client()
+
+    total_flows = (
+        client.table(FLOWS_TABLE).select("id", count="exact").limit(1).execute()
+    ).count or 0
+
+    verdict_rows = client.table(FLOW_VERDICTS_TABLE).select("flow_id, verdict").execute().data
+
+    counts = {v: 0 for v in VALID_VERDICTS}
+    for row in verdict_rows:
+        if row["verdict"] in counts:
+            counts[row["verdict"]] += 1
+
+    missed_by_model = 0
+    tp_flow_ids = [row["flow_id"] for row in verdict_rows if row["verdict"] == "true_positive"]
+    if tp_flow_ids:
+        active = get_active_model_version()
+        if active:
+            scores = (
+                client.table(FLOW_SCORES_TABLE)
+                .select("flow_id, is_anomalous")
+                .eq("model_version_id", active["id"])
+                .in_("flow_id", tp_flow_ids)
+                .execute()
+            ).data
+            missed_by_model = sum(1 for s in scores if not s["is_anomalous"])
+
+    return {
+        **counts,
+        "not_verdicted": max(total_flows - len(verdict_rows), 0),
+        "missed_by_model": missed_by_model,
+        "total_flows": total_flows,
+    }

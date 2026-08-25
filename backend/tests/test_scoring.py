@@ -7,14 +7,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import train_models  # noqa: E402
 
-from app.services.ml.feature_matrix import FEATURE_NAMES, build_feature_matrix  # noqa: E402
+from app.services.ml.feature_matrix import (  # noqa: E402
+    BEHAVIORAL_FEATURE_NAMES,
+    FEATURE_NAMES,
+    build_feature_matrix,
+    subset_columns,
+)
 from app.services.ml.scoring import (  # noqa: E402
     explain,
     is_anomalous,
     raw_scores,
     to_anomaly_score,
 )
-from tests.test_leakage import NORMAL, SCAN  # noqa: E402
+from tests.test_leakage import NORMAL, SCAN, scan_flow  # noqa: E402
 
 
 def bundle():
@@ -83,3 +88,48 @@ def test_explanation_is_never_a_bare_verdict():
     for i, is_flagged in enumerate(flagged):
         if is_flagged:
             assert len(contributions[i]) > 0, "flagged flow with no explanation"
+
+
+def behavioral_bundle():
+    """The shipped model's actual variant -- 8 behavioural features, no
+    timing/size. Distinct from bundle() above, which fits all 13.
+    """
+    return train_models.fit_bundle("isolation_forest", NORMAL[:160], BEHAVIORAL_FEATURE_NAMES)
+
+
+def test_full_explanation_covers_every_feature_and_matches_raw_values():
+    """top_n=None, positive_only=False must return one entry per feature,
+    and each entry's flow_value must match what build_feature_matrix
+    actually produced -- the automated version of "verifiably correct
+    against raw feature values": a reader can check close_rst=1.0 against
+    this flow's own close_type='rst' without re-running any model math.
+    """
+    b = behavioral_bundle()
+    flow = scan_flow(0)  # close_type='rst', handshake_completed=False
+    matrix = subset_columns(build_feature_matrix([flow]), BEHAVIORAL_FEATURE_NAMES)
+
+    breakdown = explain(b, matrix, top_n=None, positive_only=False)[0]
+
+    assert {entry["feature"] for entry in breakdown} == set(BEHAVIORAL_FEATURE_NAMES)
+    for entry in breakdown:
+        i = BEHAVIORAL_FEATURE_NAMES.index(entry["feature"])
+        assert entry["flow_value"] == matrix[0, i]
+        assert "baseline_value" in entry
+
+    by_name = {e["feature"]: e for e in breakdown}
+    assert by_name["close_rst"]["flow_value"] == 1.0
+    assert by_name["close_fin_fin"]["flow_value"] == 0.0
+    assert by_name["handshake_false"]["flow_value"] == 1.0
+    assert by_name["handshake_true"]["flow_value"] == 0.0
+
+
+def test_full_explanation_includes_negative_contributions():
+    """positive_only=True (the default) hides features pushing a flow
+    TOWARDS normal. With positive_only=False, an unremarkable flow should
+    show at least one negative contribution -- otherwise the "in what
+    direction" requirement has no evidence behind it.
+    """
+    b = behavioral_bundle()
+    matrix = subset_columns(build_feature_matrix(NORMAL[160:161]), BEHAVIORAL_FEATURE_NAMES)
+    breakdown = explain(b, matrix, top_n=None, positive_only=False)[0]
+    assert any(entry["contribution"] <= 0 for entry in breakdown)

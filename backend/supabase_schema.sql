@@ -172,3 +172,27 @@ begin
 end $$;
 
 create index if not exists flows_seq_idx on flows (seq);
+
+-- NetSentinel — Phase 4: score transparency & verdict/feedback loop
+-- Run once in the Supabase SQL editor. Idempotent -- safe to re-run.
+--
+-- One row per flow (flow_id is the primary key, not part of a composite
+-- key) so "one verdict per flow, re-marking overwrites" is a database
+-- guarantee, not application logic. The verdict is the analyst's
+-- ground-truth judgement about the flow's actual behaviour -- deliberately
+-- independent of whether the active model flagged it, which is what lets
+-- a flow verdicted true_positive with is_anomalous=false represent a
+-- missed detection (see docs -- Phase 4 plan) without a separate enum
+-- value for it.
+
+create table if not exists flow_verdicts (
+  flow_id uuid primary key references flows(id) on delete cascade,
+  verdict text not null check (verdict in ('true_positive', 'false_positive', 'benign', 'unknown')),
+  note text,
+  created_by text not null default 'local-analyst',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+grant select, insert, update, delete on public.flow_verdicts to service_role;
+
+create index if not exists flow_verdicts_verdict_idx on flow_verdicts (verdict);
