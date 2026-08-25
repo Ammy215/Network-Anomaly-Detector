@@ -75,47 +75,127 @@ def replace_host_profiles(profiles: list[dict]) -> list[dict]:
     return result.data
 
 
-def list_flows(limit: int = 500) -> list[dict]:
-    """Capped, most-recent-first -- for display (the frontend table). Not
-    safe to use for aggregates: see list_all_flows().
+SORT_OPTIONS = ("started_desc", "score_desc", "score_asc")
 
-    Anomaly scores from the latest primary model are merged in where they
-    exist; flows scored by no model simply come back without score fields,
-    so the table still renders before any model has been trained.
-    """
-    rows = [
-        _nest_verdict(_flatten_features(row))
-        for row in (
-            get_client()
-            .table(FLOWS_TABLE)
-            .select("*, flow_features(*), flow_verdicts(*)")
-            .order("started_at", desc=True)
-            .limit(limit)
+
+def list_source_files(batch_size: int = 1000) -> list[str]:
+    """Distinct source_file values across every flow, for a filter dropdown."""
+    client = get_client()
+    seen: set[str] = set()
+    start = 0
+    while True:
+        page = (
+            client.table(FLOWS_TABLE)
+            .select("source_file")
+            .range(start, start + batch_size - 1)
             .execute()
         ).data
-    ]
+        seen.update(row["source_file"] for row in page)
+        if len(page) < batch_size:
+            break
+        start += batch_size
+    return sorted(seen)
+
+
+def _scores_for_model(model_version_id: str, batch_size: int = 1000) -> dict[str, dict]:
+    """Every score row for one model, paginated and keyed by flow_id."""
+    client = get_client()
+    by_flow: dict[str, dict] = {}
+    start = 0
+    while True:
+        page = (
+            client.table(FLOW_SCORES_TABLE)
+            .select("flow_id, anomaly_score, is_anomalous, top_features")
+            .eq("model_version_id", model_version_id)
+            .range(start, start + batch_size - 1)
+            .execute()
+        ).data
+        by_flow.update({row["flow_id"]: row for row in page})
+        if len(page) < batch_size:
+            break
+        start += batch_size
+    return by_flow
+
+
+def list_flows(limit: int = 500, source_file: str | None = None, sort: str = "started_desc") -> list[dict]:
+    """Capped, most-recent-first by default -- for display (the frontend
+    table). Not safe to use for aggregates: see list_all_flows().
+
+    `source_file` and `sort` exist so an analyst can actually find a
+    specific flow (e.g. for verdict testing) instead of only ever seeing
+    the newest 500 -- a single capture can easily have 1000+ flows sitting
+    entirely outside that window. Filtering or sorting by score therefore
+    searches a wider slice than the plain default view; this is a
+    deliberately simple mechanism, not real server-side pagination (that's
+    Phase 8's job).
+
+    Anomaly scores from the active model are merged in where they exist;
+    flows scored by no model simply come back without score fields, so
+    the table still renders before any model has been trained.
+    """
+    needs_wide_search = bool(source_file) or sort in ("score_desc", "score_asc")
+    client = get_client()
+
+    if needs_wide_search:
+        # Supabase enforces a server-side max-rows cap (1000 here)
+        # regardless of what `.limit()` asks for -- confirmed: a single
+        # 3000-row request for a 1039-row capture silently came back with
+        # exactly 1000. Paginating with `.range()` is what actually gets
+        # every matching row, same pattern as list_all_flows().
+        rows = []
+        start = 0
+        batch_size = 1000
+        while True:
+            query = client.table(FLOWS_TABLE).select("*, flow_features(*), flow_verdicts(*)")
+            if source_file:
+                query = query.eq("source_file", source_file)
+            page = (
+                query.order("started_at", desc=True)
+                .range(start, start + batch_size - 1)
+                .execute()
+            ).data
+            rows.extend(_nest_verdict(_flatten_features(row)) for row in page)
+            if len(page) < batch_size:
+                break
+            start += batch_size
+    else:
+        query = client.table(FLOWS_TABLE).select("*, flow_features(*), flow_verdicts(*)")
+        query = query.order("started_at", desc=True).limit(limit)
+        rows = [_nest_verdict(_flatten_features(row)) for row in query.execute().data]
 
     version = get_active_model_version()
-    if not version:
-        return rows
+    if version:
+        if needs_wide_search:
+            # A filter/score-sort can pull 1000+ flow ids -- as an `.in_()`
+            # filter that blows past PostgREST's request-size limit
+            # (confirmed: fails above ~600 ids with "JSON could not be
+            # generated"). Paginating every score row for the model
+            # instead sidesteps the URL/body-size cliff entirely.
+            by_flow = _scores_for_model(version["id"])
+        else:
+            scores = (
+                get_client()
+                .table(FLOW_SCORES_TABLE)
+                .select("flow_id, anomaly_score, is_anomalous, top_features")
+                .eq("model_version_id", version["id"])
+                .in_("flow_id", [r["id"] for r in rows])
+                .execute()
+            ).data
+            by_flow = {s["flow_id"]: s for s in scores}
 
-    scores = (
-        get_client()
-        .table(FLOW_SCORES_TABLE)
-        .select("flow_id, anomaly_score, is_anomalous, top_features")
-        .eq("model_version_id", version["id"])
-        .in_("flow_id", [r["id"] for r in rows])
-        .execute()
-    ).data
-    by_flow = {s["flow_id"]: s for s in scores}
+        for row in rows:
+            score = by_flow.get(row["id"])
+            if score:
+                row["anomaly_score"] = score["anomaly_score"]
+                row["is_anomalous"] = score["is_anomalous"]
+                row["top_features"] = score["top_features"]
 
-    for row in rows:
-        score = by_flow.get(row["id"])
-        if score:
-            row["anomaly_score"] = score["anomaly_score"]
-            row["is_anomalous"] = score["is_anomalous"]
-            row["top_features"] = score["top_features"]
-    return rows
+    if sort == "score_desc":
+        rows.sort(key=lambda r: (r.get("anomaly_score") is None, -(r.get("anomaly_score") or 0)))
+    elif sort == "score_asc":
+        rows.sort(key=lambda r: (r.get("anomaly_score") is None, r.get("anomaly_score") or 0))
+
+    return rows if source_file else rows[:limit]
 
 
 def list_flow_scores(flow_id: str) -> list[dict]:

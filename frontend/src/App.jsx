@@ -41,9 +41,16 @@ function App() {
   const [expandedFlowId, setExpandedFlowId] = useState(null)
   const [verdictSummary, setVerdictSummary] = useState(null)
 
+  const [sourceFiles, setSourceFiles] = useState([])
+  const [sourceFileFilter, setSourceFileFilter] = useState('')
+  const [scoreSort, setScoreSort] = useState('started_desc')
+
   function loadFlows() {
     setFlowsError(null)
-    fetch(`${API_BASE_URL}/api/flows`)
+    const params = new URLSearchParams()
+    if (sourceFileFilter) params.set('source_file', sourceFileFilter)
+    if (scoreSort !== 'started_desc') params.set('sort', scoreSort)
+    fetch(`${API_BASE_URL}/api/flows?${params.toString()}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Request failed: ${res.status}`)
         return res.json()
@@ -53,6 +60,16 @@ function App() {
         setScoredBy(data.scored_by)
       })
       .catch((err) => setFlowsError(err.message))
+  }
+
+  function loadSourceFiles() {
+    fetch(`${API_BASE_URL}/api/flows/source-files`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Request failed: ${res.status}`)
+        return res.json()
+      })
+      .then((data) => setSourceFiles(data.source_files))
+      .catch(() => setSourceFiles([]))
   }
 
   function loadVerdictSummary() {
@@ -74,9 +91,14 @@ function App() {
       .then((data) => setHealth(data.status))
       .catch((err) => setHealthError(err.message))
 
-    loadFlows()
+    loadSourceFiles()
     loadVerdictSummary()
   }, [])
+
+  useEffect(() => {
+    loadFlows()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceFileFilter, scoreSort])
 
   function handleUpload(e) {
     e.preventDefault()
@@ -165,6 +187,38 @@ function App() {
 
       <div>
         <h2 className="text-lg font-medium mb-2">Flows</h2>
+        <div className="flex flex-wrap items-center gap-3 mb-2 text-sm font-mono">
+          <label className="flex items-center gap-2 text-slate-400">
+            Source file
+            <select
+              value={sourceFileFilter}
+              onChange={(e) => setSourceFileFilter(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200"
+            >
+              <option value="">All</option>
+              {sourceFiles.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-slate-400">
+            Sort by score
+            <select
+              value={scoreSort}
+              onChange={(e) => setScoreSort(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200"
+            >
+              <option value="started_desc">Newest first (default)</option>
+              <option value="score_desc">Score: high to low</option>
+              <option value="score_asc">Score: low to high</option>
+            </select>
+          </label>
+          {(sourceFileFilter || scoreSort !== 'started_desc') && (
+            <span className="text-slate-600">{flows.length} flows shown</span>
+          )}
+        </div>
         {scoredBy && (
           <p className="text-xs text-slate-500 mb-2 font-mono">
             scores from {scoredBy.algorithm} ({scoredBy.variant}), threshold{' '}

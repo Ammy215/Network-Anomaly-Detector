@@ -140,17 +140,28 @@ def upload_pcap(file: UploadFile):
 
 
 @router.get("/flows")
-def get_flows():
+def get_flows(source_file: str | None = None, sort: str = "started_desc"):
     """Flows with their anomaly scores.
 
     `scored_by` names which model produced the scores. Two algorithms
     score the same flow very differently, so a bare score column with no
     attribution is genuinely ambiguous -- the caller must be able to tell
     which model it is looking at.
+
+    `source_file`/`sort` let an analyst find a specific flow (e.g. for
+    verdict testing) beyond the default most-recent-500 view -- see
+    list_flows()'s docstring for why a filter or score-sort searches a
+    wider slice under the hood.
     """
+    if sort not in supabase_client.SORT_OPTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"sort must be one of {supabase_client.SORT_OPTIONS}",
+        )
+
     version = supabase_client.get_active_model_version()
     return {
-        "flows": supabase_client.list_flows(),
+        "flows": supabase_client.list_flows(source_file=source_file, sort=sort),
         "scored_by": {
             "algorithm": version["algorithm"],
             "variant": version["variant"],
@@ -158,3 +169,9 @@ def get_flows():
             "threshold": version["threshold"],
         } if version else None,
     }
+
+
+@router.get("/flows/source-files")
+def get_source_files():
+    """Distinct source_file values, for the flows table's filter dropdown."""
+    return {"source_files": supabase_client.list_source_files()}
