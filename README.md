@@ -19,6 +19,14 @@ This is the empty-but-wired skeleton. **Nothing functional exists yet** — no p
 ## Running it locally
 
 **Backend**
+
+> **The venv must be active in every terminal before `pip install` or `uvicorn`.**
+> Installing into the global Python instead of the venv is what causes
+> hard-to-diagnose dependency conflicts (e.g. a stale `pyparsing` from an
+> unrelated global package silently breaking the Supabase client's import
+> chain). Check `where python` (PowerShell) resolves to
+> `backend\.venv\Scripts\python.exe` before running anything.
+
 ```powershell
 cd backend
 python -m venv .venv
@@ -28,6 +36,9 @@ Copy-Item ..\.env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 Visit `http://localhost:8000/api/health` — should return `{"status":"ok"}`.
+
+Each new terminal session needs `.venv\Scripts\activate` run again before
+`uvicorn` — activation doesn't persist across terminals.
 
 **Frontend** (separate terminal)
 ```powershell
