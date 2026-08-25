@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     llm_api_key: Optional[str] = None
     vector_db_url: Optional[str] = None
 
+    # Phase 1 — PCAP upload & flow assembly
+    flow_inactivity_timeout_seconds: int = 120
+    max_upload_size_bytes: int = 50 * 1024 * 1024
+    # Explicit override if tshark isn't discoverable on PATH (common right
+    # after a fresh Wireshark install, until the shell/session restarts).
+    tshark_path: Optional[str] = None
+
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.backend_cors_origins.split(",")]
