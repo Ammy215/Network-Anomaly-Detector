@@ -80,3 +80,53 @@ grant select, insert, update, delete on public.host_profiles to service_role;
 
 -- Same RLS rationale as flows: service_role only, no frontend-direct
 -- access to either new table yet.
+
+-- NetSentinel — Phase 3: ML detection (model registry + per-flow scores)
+-- Run once in the Supabase SQL editor. Idempotent — safe to re-run.
+
+-- Insert-only registry. A retrain adds a row; it never updates one, so a
+-- model is never silently replaced and old scores stay interpretable.
+create table if not exists model_versions (
+  id uuid primary key default gen_random_uuid(),
+  algorithm text not null,
+  variant text not null default 'primary',
+  feature_list jsonb not null,
+  training_set_size integer not null,
+  training_source_files jsonb not null,
+  hyperparameters jsonb not null,
+  random_seed integer,
+  threshold double precision not null,
+  threshold_strategy text not null,
+  metrics jsonb not null,
+  artifact_path text,
+  created_at timestamptz not null default now()
+);
+grant select, insert, update, delete on public.model_versions to service_role;
+
+-- Scores are keyed by (flow, model version) so two models can score the
+-- same flow and both answers survive.
+create table if not exists flow_scores (
+  flow_id uuid not null references flows(id) on delete cascade,
+  model_version_id uuid not null references model_versions(id) on delete cascade,
+  anomaly_score double precision not null,
+  raw_score double precision not null,
+  is_anomalous boolean not null,
+  top_features jsonb not null,
+  scored_at timestamptz not null default now(),
+  primary key (flow_id, model_version_id)
+);
+create index if not exists flow_scores_model_idx on flow_scores (model_version_id);
+create index if not exists flow_scores_score_idx on flow_scores (anomaly_score desc);
+grant select, insert, update, delete on public.flow_scores to service_role;
+
+-- Which model is actually shipped. Previously the UI picked whichever row
+-- was inserted last, so it silently displayed a different model than the
+-- one being discussed -- see docs/ML-MODEL-NOTES.md for the concrete
+-- 996-flow disagreement that exposed this. The DB is the single source of
+-- truth; the code constant is only a fallback when nothing is marked.
+alter table model_versions add column if not exists is_active boolean not null default false;
+
+-- Enforces "at most one active model" in the database rather than trusting
+-- application code to maintain it.
+create unique index if not exists model_versions_one_active_idx
+  on model_versions (is_active) where is_active = true;

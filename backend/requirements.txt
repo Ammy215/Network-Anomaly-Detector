@@ -5,4 +5,5 @@ python-dotenv
 python-multipart
 pyshark
 supabase
+scikit-learn
 pytest
