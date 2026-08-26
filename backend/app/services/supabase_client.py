@@ -11,6 +11,7 @@ HOST_PROFILES_TABLE = "host_profiles"
 MODEL_VERSIONS_TABLE = "model_versions"
 FLOW_SCORES_TABLE = "flow_scores"
 FLOW_VERDICTS_TABLE = "flow_verdicts"
+IP_ENRICHMENTS_TABLE = "ip_enrichments"
 
 # Mirrors the flow_verdicts.verdict CHECK constraint in supabase_schema.sql
 # -- kept here too so the API can reject an invalid value with a clean 422
@@ -400,6 +401,39 @@ def flow_exists(flow_id: str) -> bool:
     return bool(result.data)
 
 
+def get_flow_with_score(flow_id: str) -> dict | None:
+    """One flow's src/dst IPs plus its current is_anomalous flag under
+    the active model -- what enrichment needs to gate on "only flagged
+    flows" and pick the external IP, without pulling in unrelated
+    feature/score fields it has no use for.
+    """
+    result = (
+        get_client()
+        .table(FLOWS_TABLE)
+        .select("id, src_ip, dst_ip")
+        .eq("id", flow_id)
+        .execute()
+    )
+    if not result.data:
+        return None
+    flow = result.data[0]
+
+    version = get_active_model_version()
+    score = (
+        get_client()
+        .table(FLOW_SCORES_TABLE)
+        .select("is_anomalous")
+        .eq("flow_id", flow_id)
+        .eq("model_version_id", version["id"])
+        .execute()
+        .data
+        if version
+        else []
+    )
+    flow["is_anomalous"] = bool(score[0]["is_anomalous"]) if score else False
+    return flow
+
+
 def upsert_flow_verdict(flow_id: str, verdict: str, note: str | None, created_by: str) -> dict:
     """One row per flow -- upsert on flow_id, so re-marking a flow
     overwrites its existing verdict rather than creating a duplicate.
@@ -469,3 +503,33 @@ def get_verdict_summary() -> dict:
         "missed_by_model": missed_by_model,
         "total_flows": total_flows,
     }
+
+
+def get_cached_enrichment(ip: str) -> dict | None:
+    result = (
+        get_client()
+        .table(IP_ENRICHMENTS_TABLE)
+        .select("*")
+        .eq("ip", ip)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def upsert_enrichment(ip: str, providers: dict) -> dict:
+    """Upsert on ip -- an IP's cache entry is shared across every flow
+    that happens to reference it, and refreshing it after TTL expiry
+    overwrites the same row rather than accumulating history.
+    """
+    row = {
+        "ip": ip,
+        **{name: result for name, result in providers.items()},
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = (
+        get_client()
+        .table(IP_ENRICHMENTS_TABLE)
+        .upsert(row, on_conflict="ip")
+        .execute()
+    )
+    return result.data[0] if result.data else row

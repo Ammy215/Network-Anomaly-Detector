@@ -162,6 +162,12 @@ alter table flows alter column seq set default nextval('flows_seq_seq');
 alter table flows alter column seq set not null;
 alter sequence flows_seq_seq owned by flows.seq;
 
+-- Table-level grants don't cover sequence privileges -- inserting into
+-- flows calls nextval() on this sequence via the column default, which
+-- needs its own USAGE grant. Missing this broke every flow insert (i.e.
+-- every PCAP upload) from this migration onward until caught here.
+grant usage, select on sequence flows_seq_seq to service_role;
+
 do $$
 begin
   if not exists (
@@ -196,3 +202,23 @@ create table if not exists flow_verdicts (
 grant select, insert, update, delete on public.flow_verdicts to service_role;
 
 create index if not exists flow_verdicts_verdict_idx on flow_verdicts (verdict);
+
+-- NetSentinel — Phase 5: selective threat-intel enrichment
+-- Run once in the Supabase SQL editor. Idempotent -- safe to re-run.
+--
+-- Cached by IP, not by flow: an IP's reputation doesn't depend on which
+-- flow surfaced it, so two different flagged flows hitting the same
+-- public IP share one cache entry. Private/internal IPs never get a row
+-- here at all -- that check happens in the backend before any provider
+-- (or this table) is ever touched, so this table only ever holds
+-- genuinely external indicators.
+
+create table if not exists ip_enrichments (
+  ip inet primary key,
+  abuseipdb jsonb,
+  otx jsonb,
+  ipinfo jsonb,
+  virustotal jsonb,
+  fetched_at timestamptz not null default now()
+);
+grant select, insert, update, delete on public.ip_enrichments to service_role;

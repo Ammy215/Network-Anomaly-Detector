@@ -6,5 +6,6 @@ python-multipart
 pyshark
 supabase
 pyparsing>=3.1.0,<4  # supabase -> storage3 -> pyiceberg needs DelimitedList (pyparsing>=3.1); an older 2.x can get resolved in otherwise and crashes backend import
+httpx  # already a transitive dep via supabase; used directly for threat-intel provider calls
 scikit-learn
 pytest
