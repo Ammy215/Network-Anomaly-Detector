@@ -20,6 +20,11 @@ build/
 # The model_versions table is the source of truth for what was trained.
 backend/models/
 
+# RAG corpus data — the local Chroma vector store and the cached MITRE
+# ATT&CK STIX bundle. Both binary/large and fully regenerable from
+# source docs + scripts/ingest_rag_corpus.py; never commit either.
+backend/data/
+
 # Editor / OS
 .vscode/*
 !.vscode/extensions.json
