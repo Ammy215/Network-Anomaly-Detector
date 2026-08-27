@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import enrichment, models, pcap, rag, verdicts
+from app.routers import enrichment, investigate, models, pcap, rag, verdicts
 
 # Nothing previously configured a level, so the root logger defaulted to
 # WARNING and every netsentinel.* logger.info() call (scoring, pcap,
@@ -26,6 +26,7 @@ app.include_router(models.router)
 app.include_router(verdicts.router)
 app.include_router(enrichment.router)
 app.include_router(rag.router)
+app.include_router(investigate.router)
 
 
 @app.get("/api/health")

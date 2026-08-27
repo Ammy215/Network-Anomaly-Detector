@@ -9,4 +9,6 @@ pyparsing>=3.1.0,<4  # supabase -> storage3 -> pyiceberg needs DelimitedList (py
 httpx  # already a transitive dep via supabase; used directly for threat-intel provider calls
 scikit-learn
 chromadb  # local vector DB for RAG retrieval; bundled embedding model runs via onnxruntime, no API key
+langgraph  # Phase 7 -- orchestrates the classify/retrieve/explain/self_check investigation pipeline
+groq  # Phase 7 -- LLM provider; free tier, no-training-on-data policy (see docs/PROJECT.md decision log)
 pytest

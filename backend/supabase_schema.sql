@@ -222,3 +222,28 @@ create table if not exists ip_enrichments (
   fetched_at timestamptz not null default now()
 );
 grant select, insert, update, delete on public.ip_enrichments to service_role;
+
+-- NetSentinel — Phase 7: AI investigation pipeline
+-- Run once in the Supabase SQL editor. Idempotent -- safe to re-run.
+--
+-- One row per flow, like flow_verdicts -- re-running "Investigate" on the
+-- same flow overwrites its prior result rather than accumulating history.
+-- `retrieved_chunks` stores the full chunk objects (id/text/source/title/
+-- similarity), not just ids, so a cached result can still show an analyst
+-- the exact text a citation claims to quote without a second Chroma call.
+-- Model ids are recorded per row because which Groq models produced this
+-- result is part of what makes it interpretable later (same reasoning as
+-- model_versions being an insert-only, explicitly-labelled registry).
+
+create table if not exists investigations (
+  flow_id uuid primary key references flows(id) on delete cascade,
+  classification jsonb not null,
+  retrieved_chunks jsonb not null,
+  investigation jsonb not null,
+  self_check jsonb not null,
+  classify_model text not null,
+  explain_model text not null,
+  self_check_model text not null,
+  fetched_at timestamptz not null default now()
+);
+grant select, insert, update, delete on public.investigations to service_role;

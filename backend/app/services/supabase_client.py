@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from functools import lru_cache
 
-from supabase import Client, create_client
+import httpx
+from supabase import Client, ClientOptions, create_client
 
 from app.config import settings
 
@@ -12,6 +13,7 @@ MODEL_VERSIONS_TABLE = "model_versions"
 FLOW_SCORES_TABLE = "flow_scores"
 FLOW_VERDICTS_TABLE = "flow_verdicts"
 IP_ENRICHMENTS_TABLE = "ip_enrichments"
+INVESTIGATIONS_TABLE = "investigations"
 
 # Mirrors the flow_verdicts.verdict CHECK constraint in supabase_schema.sql
 # -- kept here too so the API can reject an invalid value with a clean 422
@@ -21,6 +23,19 @@ VALID_VERDICTS = ("true_positive", "false_positive", "benign", "unknown")
 
 @lru_cache
 def get_client() -> Client:
+    """One shared client for the whole process (safe: postgrest-py's HTTP
+    client handles its own connection pooling internally).
+
+    HTTP/2 is explicitly disabled here. postgrest-py defaults to
+    `httpx.Client(http2=True)`, which multiplexes every request over one
+    shared TCP connection -- under real concurrent load (e.g. a page load
+    firing /api/flows, /api/verdicts/summary, and /api/flows/source-files
+    in parallel, each served in its own FastAPI threadpool thread) that
+    connection was observed getting reset mid-request
+    (`httpx.RemoteProtocolError: ConnectionTerminated`), 500ing every
+    request sharing it. HTTP/1.1 instead pools several independent
+    connections, so concurrent requests can't take each other down.
+    """
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise RuntimeError(
             "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set in backend/.env — "
@@ -29,7 +44,8 @@ def get_client() -> Client:
     url = settings.supabase_url
     if not url.startswith("http"):
         url = f"https://{url}"
-    return create_client(url, settings.supabase_service_role_key)
+    options = ClientOptions(httpx_client=httpx.Client(http2=False))
+    return create_client(url, settings.supabase_service_role_key, options=options)
 
 
 def _iso(value):
@@ -514,6 +530,83 @@ def get_cached_enrichment(ip: str) -> dict | None:
         .execute()
     )
     return result.data[0] if result.data else None
+
+
+def get_flow_for_investigation(flow_id: str) -> dict | None:
+    """Everything the Phase 7 LLM pipeline needs about one flow: its own
+    columns, Phase 2's derived features, and the active model's score plus
+    the existing `top_features` attribution -- reused as the LLM's primary
+    evidence rather than recomputed.
+    """
+    result = (
+        get_client()
+        .table(FLOWS_TABLE)
+        .select("*, flow_features(*)")
+        .eq("id", flow_id)
+        .execute()
+    )
+    if not result.data:
+        return None
+    flow = _flatten_features(result.data[0])
+
+    version = get_active_model_version()
+    score = (
+        get_client()
+        .table(FLOW_SCORES_TABLE)
+        .select("anomaly_score, raw_score, is_anomalous, top_features")
+        .eq("flow_id", flow_id)
+        .eq("model_version_id", version["id"])
+        .execute()
+        .data
+        if version
+        else []
+    )
+    if score:
+        flow.update(score[0])
+    else:
+        flow["is_anomalous"] = False
+        flow["anomaly_score"] = None
+        flow["top_features"] = []
+    return flow
+
+
+def get_cached_investigation(flow_id: str) -> dict | None:
+    result = (
+        get_client()
+        .table(INVESTIGATIONS_TABLE)
+        .select("*")
+        .eq("flow_id", flow_id)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def upsert_investigation(flow_id: str, result: dict) -> dict:
+    """One investigation per flow -- upsert on flow_id, so re-running
+    "Investigate" on the same flow overwrites its prior result rather
+    than accumulating history, same pattern as `upsert_enrichment`.
+    """
+    row = {
+        "flow_id": flow_id,
+        "classification": result["classification"],
+        # Stored in full (not just ids) so a cache hit can still show the
+        # analyst the exact chunk text a citation claims to quote, without
+        # a second round-trip to Chroma.
+        "retrieved_chunks": result["retrieved_chunks"],
+        "investigation": result["investigation"],
+        "self_check": result["self_check"],
+        "classify_model": result["classify_model"],
+        "explain_model": result["explain_model"],
+        "self_check_model": result["self_check_model"],
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+    upserted = (
+        get_client()
+        .table(INVESTIGATIONS_TABLE)
+        .upsert(row, on_conflict="flow_id")
+        .execute()
+    )
+    return upserted.data[0] if upserted.data else row
 
 
 def upsert_enrichment(ip: str, providers: dict) -> dict:

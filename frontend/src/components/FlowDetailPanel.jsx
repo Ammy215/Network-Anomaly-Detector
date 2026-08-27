@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { featureName, featureValue } from '../featureLabels'
 import { severityBand } from '../severity'
+import Investigation from './Investigation'
 import ThreatIntel from './ThreatIntel'
 
 const VERDICT_OPTIONS = [
@@ -200,6 +201,7 @@ export default function FlowDetailPanel({ flow, scoredBy, apiBaseUrl, onVerdictS
       </div>
 
       {flow.is_anomalous && <ThreatIntel flow={flow} apiBaseUrl={apiBaseUrl} />}
+      {flow.is_anomalous && <Investigation flow={flow} apiBaseUrl={apiBaseUrl} />}
     </div>
   )
 }
