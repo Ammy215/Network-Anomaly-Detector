@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { apiGet } from '../api'
 import Badge from '../components/ui/Badge'
 import Card from '../components/ui/Card'
@@ -227,19 +228,42 @@ export default function FlowsPage() {
                         <VerdictBadge flow={flow} />
                       </td>
                     </tr>
-                    {isExpanded && (
-                      <tr className="border-b border-border/60">
-                        <td colSpan={COLUMNS.length} className="bg-bg-page/40 p-0">
-                          <div className="sticky left-0 w-[100cqw] px-3 py-4">
-                            <FlowDetailPanel
-                              flow={flow}
-                              scoredBy={scoredBy}
-                              onVerdictSaved={handleVerdictSaved}
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    )}
+                    <AnimatePresence initial={false}>
+                      {isExpanded && (
+                        <tr key="detail" className="border-b border-border/60">
+                          <td colSpan={COLUMNS.length} className="bg-bg-page/40 p-0">
+                            {/* The sticky/cqw wrapper stays OUTSIDE the
+                                height-animated motion.div deliberately --
+                                overflow:hidden (needed to clip the height
+                                animation) creates a new sticky containing
+                                block for anything nested inside it, which
+                                would silently break the horizontal-scroll
+                                clipping fix from the last review round.
+                                Keeping `sticky` as the direct child of `td`
+                                means its nearest scrolling ancestor stays the
+                                Card below, unaffected by the animation
+                                wrapper nested inside it. */}
+                            <div className="sticky left-0 w-[100cqw]">
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.22, ease: 'easeInOut' }}
+                                className="overflow-hidden"
+                              >
+                                <div className="px-3 py-4">
+                                  <FlowDetailPanel
+                                    flow={flow}
+                                    scoredBy={scoredBy}
+                                    onVerdictSaved={handleVerdictSaved}
+                                  />
+                                </div>
+                              </motion.div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </AnimatePresence>
                   </Fragment>
                 )
               })

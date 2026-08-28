@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import Badge from '../components/ui/Badge'
 import Card from '../components/ui/Card'
 import Skeleton from '../components/ui/Skeleton'
@@ -83,11 +84,22 @@ export default function InvestigationsPage({ allFlows, allFlowsLoading }) {
                   )}
                   <span className="ml-auto font-mono text-xs text-text-muted">{flow.source_file}</span>
                 </button>
-                {isExpanded && (
-                  <div className="border-t border-border px-4 pb-4 pt-1">
-                    <Investigation flow={flow} />
-                  </div>
-                )}
+                <AnimatePresence initial={false}>
+                  {isExpanded && (
+                    <motion.div
+                      key="detail"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.22, ease: 'easeInOut' }}
+                      className="overflow-hidden"
+                    >
+                      <div className="border-t border-border px-4 pb-4 pt-1">
+                        <Investigation flow={flow} />
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             )
           })}
