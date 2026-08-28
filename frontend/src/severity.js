@@ -6,47 +6,83 @@
 //
 // Copy stays to "unusual" / "elevated" / "flagged" -- never "malicious"
 // or "attack" -- per docs/PROJECT.md's language-discipline rule.
+//
+// `tone` maps to Badge.jsx's color tokens (docs/PROJECT.md §20's locked
+// accent scale) -- this file no longer hardcodes Tailwind color classes
+// itself, so there is exactly one place (Badge.jsx) that turns a tone
+// into actual styling.
 
 const ELEVATED_CUTOFF = 85
 const MEDIUM_CUTOFF = 50
+// "Critical" (the pulsing red state, §20) = flagged AND near-certain,
+// not a new label -- an extra treatment layered on the existing High
+// badge. Chosen as a judgment call, flagged in the Phase 8 plan.
+const CRITICAL_CUTOFF = 95
 
 export function severityBand(anomalyScore, isAnomalous) {
   if (isAnomalous) {
     return {
       label: 'High',
       detail: 'flagged by the active model',
-      color: 'text-red-400',
-      badgeClass: 'bg-red-950 text-red-400 border-red-800',
+      tone: 'red',
+      critical: anomalyScore != null && anomalyScore >= CRITICAL_CUTOFF,
     }
   }
   if (anomalyScore != null && anomalyScore >= ELEVATED_CUTOFF) {
     return {
       label: 'Elevated',
-      detail: 'not flagged — near the model\'s threshold',
-      color: 'text-amber-400',
-      badgeClass: 'bg-amber-950 text-amber-400 border-amber-800',
+      detail: "not flagged — near the model's threshold",
+      tone: 'amber',
+      critical: false,
     }
   }
   if (anomalyScore != null && anomalyScore >= MEDIUM_CUTOFF) {
     return {
       label: 'Medium',
       detail: 'somewhat unusual',
-      color: 'text-amber-500',
-      badgeClass: 'bg-amber-950/60 text-amber-500 border-amber-900',
+      tone: 'amber',
+      critical: false,
     }
   }
   if (anomalyScore == null) {
     return {
       label: 'Unscored',
       detail: 'no model has scored this flow yet',
-      color: 'text-slate-500',
-      badgeClass: 'bg-slate-900 text-slate-500 border-slate-800',
+      tone: 'gray',
+      critical: false,
     }
   }
   return {
     label: 'Low',
     detail: 'within the ordinary range',
-    color: 'text-green-400',
-    badgeClass: 'bg-green-950 text-green-400 border-green-800',
+    tone: 'green',
+    critical: false,
   }
+}
+
+// Verdict badges: TP = a confirmed real anomaly (red, matches High
+// severity); FP = the model was wrong, this traffic is fine but the
+// mismatch is worth an analyst's attention (amber); benign = confirmed
+// fine (green); unknown = not yet judged (gray, §20's locked UNKNOWN
+// color).
+const VERDICT_TONE = {
+  true_positive: 'red',
+  false_positive: 'amber',
+  benign: 'green',
+  unknown: 'gray',
+}
+
+const VERDICT_LABEL = {
+  true_positive: 'TP',
+  false_positive: 'FP',
+  benign: 'Benign',
+  unknown: 'Unknown',
+}
+
+export function verdictTone(value) {
+  return VERDICT_TONE[value] ?? 'gray'
+}
+
+export function verdictLabel(value) {
+  return VERDICT_LABEL[value] ?? value
 }
