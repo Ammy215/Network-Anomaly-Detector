@@ -8,6 +8,7 @@ import InvestigationsPage from './pages/InvestigationsPage'
 import ModelDashboardPage from './pages/ModelDashboardPage'
 import AdminPage from './pages/AdminPage'
 import AuthScreen from './pages/AuthScreen'
+import LiveCapturePage from './pages/LiveCapturePage'
 
 async function fetchAllFlows(sourceFiles, signal) {
   const results = await Promise.all(
@@ -157,6 +158,7 @@ function AuthedApp() {
           {activePage === 'investigations' && (
             <InvestigationsPage allFlows={allFlows} allFlowsLoading={allFlowsLoading} />
           )}
+          {activePage === 'live-capture' && <LiveCapturePage />}
           {activePage === 'models' && <ModelDashboardPage models={models} />}
           {/* Defensive re-check even though Sidebar already hides this nav
               item for non-admins -- the server is still the real gate. */}

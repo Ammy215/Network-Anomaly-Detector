@@ -4,6 +4,7 @@ pydantic-settings
 python-dotenv
 python-multipart
 pyshark
+scapy  # Phase 10 -- live sniffing (Npcap-backed on Windows); pyshark/tshark remains the PCAP-file parser, different jobs
 supabase
 pyparsing>=3.1.0,<4  # supabase -> storage3 -> pyiceberg needs DelimitedList (pyparsing>=3.1); an older 2.x can get resolved in otherwise and crashes backend import
 httpx  # already a transitive dep via supabase; used directly for threat-intel provider calls

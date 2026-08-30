@@ -52,19 +52,18 @@ def _decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid or expired session.") from exc
 
 
-def get_current_user(request: Request) -> CurrentUser:
-    """Verifies the bearer token Supabase Auth issued the logged-in user,
-    then looks up their role from user_profiles.
+def user_from_raw_token(token: str) -> CurrentUser:
+    """Verifies a raw bearer token string and looks up its role, regardless
+    of where the token came from (an `Authorization` header, a query
+    string). Shared by `get_current_user` (header) and
+    `get_current_user_from_query` (SSE -- the browser's `EventSource` can't
+    set custom headers, so live capture's stream endpoint authenticates via
+    a `?token=` query param instead; see Phase 10 plan for the trade-off).
 
     Role is deliberately not trusted from the token itself: a request-time
     lookup means a dashboard-granted promotion takes effect on the user's
     very next request, not only after their token next refreshes.
     """
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated.")
-    token = auth_header[len("bearer "):].strip()
-
     payload = _decode_token(token)
     user_id = payload.get("sub")
     email = payload.get("email")
@@ -79,6 +78,24 @@ def get_current_user(request: Request) -> CurrentUser:
         )
 
     return CurrentUser(id=user_id, email=email, role=profile["role"])
+
+
+def get_current_user(request: Request) -> CurrentUser:
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    token = auth_header[len("bearer "):].strip()
+    return user_from_raw_token(token)
+
+
+def get_current_user_from_query(token: str = "") -> CurrentUser:
+    # Default keeps `token` optional at the FastAPI-validation layer (which
+    # would otherwise 422 a missing query param before this function ever
+    # runs) so a missing token gets the same 401 every other unauthenticated
+    # request in this app gets, not a differently-shaped validation error.
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    return user_from_raw_token(token)
 
 
 def require_role(*roles: str):

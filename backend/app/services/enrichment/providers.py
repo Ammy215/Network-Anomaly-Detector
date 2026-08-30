@@ -5,7 +5,7 @@ same shape regardless of outcome:
 
 so a provider being down, rate-limited, or misconfigured can never raise
 into the caller -- enrichment is additive context, not load-bearing.
-This mirrors app/routers/pcap.py::_score_new_flows, which applies the
+This mirrors app/services/scoring.py::score_new_flows, which applies the
 same "a failure here must not break the primary flow" rule to scoring.
 
 Only IPs that already passed ip_classification.is_external() should ever

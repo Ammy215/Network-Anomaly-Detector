@@ -12,7 +12,7 @@ from app.services.auth import CurrentUser, get_current_user, log_audit, require_
 from app.services.feature_extraction import compute_features
 from app.services.flow_assembly import assemble_flows
 from app.services.host_profiles import compute_host_profiles
-from app.services.ml.scoring import load_bundle, score_flows
+from app.services.scoring import score_new_flows
 from app.services.pcap_validation import (
     PcapTooLargeError,
     PcapValidationError,
@@ -45,33 +45,6 @@ def _resolve_tshark_path() -> str | None:
         if Path(candidate).exists():
             return candidate
     return None
-
-
-def _score_new_flows(inserted: list[dict], feature_rows: list[dict]) -> None:
-    """Scores a fresh upload with the current primary model, if one exists.
-
-    Best-effort by design: a scoring failure must not fail the upload. The
-    flows and their features are already safely stored at this point, and
-    train_models.py can always re-score everything later.
-    """
-    try:
-        version = supabase_client.get_active_model_version()
-        if not version or not version.get("artifact_path"):
-            return
-
-        bundle = load_bundle(version["artifact_path"])
-        if bundle is None:
-            return
-
-        features_by_id = {row["flow_id"]: row for row in feature_rows}
-        enriched = [{**flow, **features_by_id.get(flow["id"], {})} for flow in inserted]
-
-        scored = score_flows(bundle, enriched)
-        supabase_client.insert_flow_scores([
-            {**row, "model_version_id": version["id"]} for row in scored
-        ])
-    except Exception as exc:
-        logger.warning("Could not score uploaded flows: %s", exc)
 
 
 @router.post("/pcap/upload")
@@ -134,7 +107,7 @@ def upload_pcap(
         all_flows = supabase_client.list_all_flows()
         supabase_client.replace_host_profiles(compute_host_profiles(all_flows))
 
-        _score_new_flows(inserted, feature_rows)
+        score_new_flows(inserted, feature_rows)
 
         log_audit(
             request, current_user, "pcap_upload",

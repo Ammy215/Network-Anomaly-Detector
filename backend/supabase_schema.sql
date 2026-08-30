@@ -304,3 +304,19 @@ grant usage, select on sequence audit_log_id_seq to service_role;
 -- or writes these tables, always via the service_role key (bypasses RLS).
 -- The frontend talks to Supabase Auth directly (a separate, RLS-independent
 -- API) but never queries these tables directly.
+
+-- NetSentinel — Phase 10: live capture mode
+-- Run once in the Supabase SQL editor. Idempotent -- safe to re-run.
+--
+-- A live capture never hits true end-of-file the way an uploaded PCAP
+-- does -- when the operator stops it, any flows still open are force-
+-- closed the same way "eof" force-closes them for an upload, but calling
+-- that "eof" would misdescribe what actually happened (nothing ended on
+-- its own; a human stopped it). Adding "stopped" as its own value keeps
+-- close_reason an honest, specific signal rather than reusing a value
+-- that means something else, matching Phase 1's own reasoning for having
+-- distinct rst/fin_fin/timeout/eof values in the first place.
+
+alter table flows drop constraint if exists flows_close_reason_check;
+alter table flows add constraint flows_close_reason_check
+  check (close_reason in ('fin_fin', 'rst', 'timeout', 'eof', 'stopped'));
