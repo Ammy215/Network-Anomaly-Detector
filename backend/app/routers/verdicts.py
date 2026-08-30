@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.services import supabase_client
 from app.services.auth import CurrentUser, get_current_user, log_audit, require_role
@@ -21,7 +21,10 @@ router = APIRouter(prefix="/api", tags=["verdicts"])
 
 class VerdictIn(BaseModel):
     verdict: str
-    note: str | None = None
+    # Bounded: this is free text an analyst types, stored in an unbounded
+    # `text` column. 2000 chars is far more than a real triage note needs
+    # and stops the field being used as arbitrary storage.
+    note: str | None = Field(default=None, max_length=2000)
 
     @field_validator("verdict")
     @classmethod
@@ -48,13 +51,21 @@ def set_flow_verdict(
     if not supabase_client.flow_exists(flow_id):
         raise HTTPException(status_code=404, detail="Flow not found.")
 
-    row = supabase_client.upsert_flow_verdict(
+    row, previous = supabase_client.upsert_flow_verdict(
         flow_id=flow_id,
         verdict=body.verdict,
         note=body.note,
-        created_by=current_user.email,
+        actor=current_user.email,
     )
-    log_audit(request, current_user, "verdict_change", detail={"flow_id": flow_id, "verdict": body.verdict})
+    # Record what was replaced, matching what role_change already does with
+    # old_role. Without this, an overwrite of another analyst's verdict left
+    # no single entry showing what the previous call had been.
+    detail = {"flow_id": flow_id, "verdict": body.verdict}
+    if previous:
+        detail["previous_verdict"] = previous.get("verdict")
+        detail["previous_author"] = previous.get("created_by")
+        detail["overwrote_other_analyst"] = previous.get("created_by") != current_user.email
+    log_audit(request, current_user, "verdict_change", detail=detail)
 
     try:
         flow = supabase_client.get_flow_for_investigation(flow_id)

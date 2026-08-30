@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.services import supabase_client
+from app.services import rate_limit, supabase_client
 from app.services.auth import CurrentUser, get_current_user, log_audit
 from app.services.enrichment.enrichment_service import get_or_fetch_enrichment
 from app.services.enrichment.ip_classification import external_ip_for_flow
@@ -37,6 +37,8 @@ def get_flow_enrichment(
     """
     if body.fetch and current_user.role not in ("analyst", "admin"):
         raise HTTPException(status_code=403, detail="Running new enrichment requires analyst or admin.")
+    if body.fetch:
+        rate_limit.enforce("enrichment", current_user.id)
 
     flow = supabase_client.get_flow_with_score(flow_id)
     if not flow:

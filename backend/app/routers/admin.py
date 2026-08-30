@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 
 from app.services import supabase_client
@@ -36,6 +36,24 @@ def change_user_role(
     if not target:
         raise HTTPException(status_code=404, detail="User not found.")
 
+    # Two lockout guards. Demoting yourself, or demoting the last remaining
+    # admin, leaves zero admins -- and because promotion is itself an
+    # admin-only action, there is then no way back through the API at all;
+    # recovery needs direct database access. Verified reproducible before
+    # this guard existed (docs/SECURITY-TESTING-NOTES.md, F7).
+    if target["role"] == "admin" and body.role != "admin":
+        if user_id == current_user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="You cannot remove your own admin role. Ask another admin to do it.",
+            )
+        admin_count = sum(1 for u in supabase_client.list_user_profiles() if u["role"] == "admin")
+        if admin_count <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot demote the last remaining admin -- promote another admin first.",
+            )
+
     updated = supabase_client.update_user_role(user_id, body.role)
     log_audit(
         request,
@@ -48,8 +66,11 @@ def change_user_role(
 
 @router.get("/audit-log")
 def get_audit_log(
-    limit: int = 200,
-    offset: int = 0,
+    # Bounded at the edge: these go straight into PostgREST's
+    # .range(offset, offset + limit - 1), where a negative or zero limit
+    # builds an inverted range and 500s.
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     current_user: CurrentUser = Depends(require_role("admin")),
 ):
     return {"entries": supabase_client.list_audit_log(limit=limit, offset=offset)}

@@ -452,7 +452,20 @@ def get_flow_with_score(flow_id: str) -> dict | None:
     return flow
 
 
-def upsert_flow_verdict(flow_id: str, verdict: str, note: str | None, created_by: str) -> dict:
+def get_flow_verdict(flow_id: str) -> dict | None:
+    """The current verdict row for a flow, or None if never marked."""
+    result = (
+        get_client()
+        .table(FLOW_VERDICTS_TABLE)
+        .select("*")
+        .eq("flow_id", flow_id)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def upsert_flow_verdict(flow_id: str, verdict: str, note: str | None, actor: str) -> tuple[dict, dict | None]:
     """One row per flow -- upsert on flow_id, so re-marking a flow
     overwrites its existing verdict rather than creating a duplicate.
 
@@ -460,21 +473,39 @@ def upsert_flow_verdict(flow_id: str, verdict: str, note: str | None, created_by
     only overwrites the columns present in an upsert, so on a re-mark the
     original insert timestamp is left untouched; the column default only
     ever fires on first insert.
+
+    `created_by` is treated the same way, and that is a fix rather than a
+    detail: it previously WAS overwritten, so re-marking someone else's
+    verdict rewrote the author while keeping their original timestamp --
+    the row then claimed the first analyst had made a call they never made.
+    Overwriting is still allowed (a senior analyst correcting a call is
+    legitimate review), but the original author is now preserved and the
+    person who changed it is recorded separately in `updated_by`.
+    Returns (new_row, previous_row) so the caller can audit what was
+    replaced. See docs/SECURITY-TESTING-NOTES.md, F1.
+
+    Who *changed* an existing verdict is recorded in the audit log rather
+    than on the row itself. supabase_schema.sql carries an optional
+    `updated_by` column for that, but it is deliberately not written here:
+    this fix must hold on an install that has not run the migration, and
+    the accountability requirement is already met by the audit entry.
     """
+    previous = get_flow_verdict(flow_id)
     row = {
         "flow_id": flow_id,
         "verdict": verdict,
         "note": note,
-        "created_by": created_by,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    if previous is None:
+        row["created_by"] = actor
     result = (
         get_client()
         .table(FLOW_VERDICTS_TABLE)
         .upsert(row, on_conflict="flow_id")
         .execute()
     )
-    return result.data[0] if result.data else {}
+    return (result.data[0] if result.data else {}), previous
 
 
 def get_verdict_summary() -> dict:

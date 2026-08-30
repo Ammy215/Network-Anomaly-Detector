@@ -201,6 +201,15 @@ create table if not exists flow_verdicts (
 );
 grant select, insert, update, delete on public.flow_verdicts to service_role;
 
+-- Phase 12 (F1), OPTIONAL: who last CHANGED the verdict, as distinct from
+-- who first recorded it. The F1 fix itself does NOT depend on this column
+-- -- the application preserves created_by and records the previous verdict
+-- and its author in the audit log, both of which work without any
+-- migration. This column is a convenience so the row itself also shows the
+-- last editor; upsert_flow_verdict() must start writing it only once this
+-- has actually been applied to the database.
+alter table flow_verdicts add column if not exists updated_by text;
+
 create index if not exists flow_verdicts_verdict_idx on flow_verdicts (verdict);
 
 -- NetSentinel — Phase 5: selective threat-intel enrichment
@@ -259,11 +268,20 @@ grant select, insert, update, delete on public.investigations to service_role;
 create table if not exists user_profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
-  role text not null default 'analyst' check (role in ('admin', 'analyst', 'viewer')),
+  -- Phase 12 (F9): defaults to 'viewer', NOT 'analyst'. An analyst can
+  -- upload PCAPs, start live capture, write verdicts, and spend LLM /
+  -- threat-intel quota -- so if signup is open, the default role, not
+  -- require_role(), is the real privilege boundary. New accounts land
+  -- read-only and an admin promotes them when there's a reason to.
+  role text not null default 'viewer' check (role in ('admin', 'analyst', 'viewer')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 grant select, insert, update, delete on public.user_profiles to service_role;
+
+-- Applies the F9 default to an already-created table (the create above is
+-- if-not-exists, so it is a no-op on an existing install).
+alter table user_profiles alter column role set default 'viewer';
 
 -- Auto-creates a profile (default role: analyst) the moment someone signs
 -- up via Supabase Auth. Admin is never self-assigned at signup -- it's

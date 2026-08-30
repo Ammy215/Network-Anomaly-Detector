@@ -11,7 +11,19 @@ from app.routers import admin, auth, capture, enrichment, integrations, investig
 # enrichment) was silently dropped -- not just new to this phase.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 
-app = FastAPI(title="NetSentinel API")
+# Phase 12 (F8): the interactive docs publish every route, body schema, and
+# role-gated path to anyone who can reach the port, unauthenticated. That's
+# a reasonable development convenience and a needless disclosure anywhere
+# else, so they're on only in development. This is also the first thing to
+# actually read `environment`, which existed in config but was never used.
+_is_dev = settings.environment == "development"
+
+app = FastAPI(
+    title="NetSentinel API",
+    docs_url="/docs" if _is_dev else None,
+    redoc_url="/redoc" if _is_dev else None,
+    openapi_url="/openapi.json" if _is_dev else None,
+)
 
 app.add_middleware(
     CORSMiddleware,

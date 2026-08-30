@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.auth import CurrentUser, require_role
 from app.services.rag.retriever import retrieve
@@ -8,8 +8,10 @@ router = APIRouter(prefix="/api", tags=["rag"])
 
 
 class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 5
+    # Bounded: an unbounded query string is a needless memory/embedding
+    # cost, and a negative top_k reaches Chroma and 500s.
+    query: str = Field(min_length=1, max_length=1000)
+    top_k: int = Field(default=5, ge=1, le=50)
 
 
 @router.post("/rag/search")

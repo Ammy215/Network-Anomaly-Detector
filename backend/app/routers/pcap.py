@@ -7,7 +7,7 @@ import pyshark
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 
 from app.config import settings
-from app.services import supabase_client
+from app.services import rate_limit, supabase_client
 from app.services.auth import CurrentUser, get_current_user, log_audit, require_role
 from app.services.feature_extraction import compute_features
 from app.services.flow_assembly import assemble_flows
@@ -53,6 +53,11 @@ def upload_pcap(
     request: Request,
     current_user: CurrentUser = Depends(require_role("analyst", "admin")),
 ):
+    # Each upload triggers a full list_all_flows() + DELETE-all-then-INSERT
+    # host_profiles rebuild, so its cost scales with total database size
+    # rather than with the size of the file uploaded.
+    rate_limit.enforce("upload", current_user.id)
+
     if not has_allowed_extension(file.filename):
         raise HTTPException(status_code=400, detail="File must be a .pcap or .pcapng file.")
 

@@ -28,8 +28,18 @@ NOT_CONFIGURED = {"available": False, "data": None, "error": "not configured"}
 
 
 def _request_failed(provider: str, ip: str, exc: Exception) -> dict:
+    """Never return the raw exception text to the caller.
+
+    httpx embeds the full request URL -- query string included -- in
+    HTTPStatusError's str(), so a provider that authenticates via a query
+    parameter would leak its API key into the client-facing `error` field,
+    into the persisted ip_enrichments cache, and into the browser. The
+    detail still reaches the server log, where it belongs; the caller gets
+    the exception type only. Fixing it here closes the whole class rather
+    than one provider (see docs/SECURITY-TESTING-NOTES.md, F2).
+    """
     logger.warning("%s lookup failed for %s: %s", provider, ip, exc)
-    return {"available": False, "data": None, "error": str(exc)}
+    return {"available": False, "data": None, "error": f"lookup failed ({type(exc).__name__})"}
 
 
 def _rate_limited(provider: str, ip: str) -> dict:
@@ -99,9 +109,13 @@ def check_ipinfo(ip: str) -> dict:
         return NOT_CONFIGURED
     try:
         logger.info("calling IPInfo for %s", ip)
+        # Header auth, not ?token= -- a key in the query string ends up in
+        # httpx's exception text, our own logs, and any intermediary's
+        # access log. IPInfo supports bearer auth; the other three
+        # providers were already header-based.
         response = httpx.get(
             f"https://ipinfo.io/{ip}/json",
-            params={"token": settings.ipinfo_api_key},
+            headers={"Authorization": f"Bearer {settings.ipinfo_api_key}"},
             timeout=TIMEOUT_SECONDS,
         )
         if response.status_code == 429:

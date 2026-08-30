@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
 import jwt
@@ -9,6 +10,8 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.services import supabase_client
+
+logger = logging.getLogger("netsentinel.auth")
 
 
 class CurrentUser(BaseModel):
@@ -125,10 +128,23 @@ def log_audit(
     action: str,
     detail: dict | None = None,
 ) -> None:
-    supabase_client.insert_audit_log(
-        user_id=current_user.id,
-        user_email=current_user.email,
-        action=action,
-        detail=detail,
-        ip_address=client_ip(request),
-    )
+    """Best-effort. Every caller runs this AFTER its side effect has already
+    committed, so letting a logging failure raise would 500 a request whose
+    write actually succeeded -- the caller would reasonably retry and
+    double-apply it. A missing audit row is the lesser harm, but it is a
+    real gap, so it is logged at WARNING rather than swallowed silently
+    (docs/SECURITY-TESTING-NOTES.md, F11).
+    """
+    try:
+        supabase_client.insert_audit_log(
+            user_id=current_user.id,
+            user_email=current_user.email,
+            action=action,
+            detail=detail,
+            ip_address=client_ip(request),
+        )
+    except Exception as exc:
+        logger.warning(
+            "AUDIT GAP -- failed to record action=%s by user=%s: %s",
+            action, current_user.email, exc,
+        )

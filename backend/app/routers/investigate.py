@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.services import supabase_client
+from app.services import rate_limit, supabase_client
 from app.services.auth import CurrentUser, get_current_user, log_audit
 from app.services.llm.groq_client import LLMUnavailableError
 from app.services.llm.pipeline import (
@@ -56,6 +56,8 @@ def investigate_flow(
     """
     if body.fetch and current_user.role not in ("analyst", "admin"):
         raise HTTPException(status_code=403, detail="Running a new investigation requires analyst or admin.")
+    if body.fetch:
+        rate_limit.enforce("investigate", current_user.id)
 
     flow = supabase_client.get_flow_for_investigation(flow_id)
     if not flow:
