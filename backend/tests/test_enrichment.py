@@ -19,6 +19,15 @@ def test_unparseable_input_is_not_external():
     assert is_external("") is False
 
 
+def test_multicast_and_broadcast_are_not_external():
+    """LAN discovery chatter (mDNS/SSDP/broadcast) isn't an enrichable IOC
+    even though it isn't a private unicast address either.
+    """
+    assert is_external("224.0.0.251") is False  # mDNS
+    assert is_external("239.255.255.250") is False  # SSDP
+    assert is_external("255.255.255.255") is False  # limited broadcast
+
+
 def test_external_ip_for_flow_finds_nothing_when_both_sides_are_private():
     """This project's own test data: an internal host scanning another
     internal host has no external indicator to enrich at all.

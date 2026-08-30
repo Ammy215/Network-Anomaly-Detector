@@ -3,15 +3,24 @@
 A single stdlib check -- `ipaddress.ip_address(x).is_global` -- covers
 RFC1918 private ranges, loopback, link-local, and other non-routable
 blocks in one call. No manual range list to maintain, no dependency.
+
+`is_global` already treats 255.255.255.255 (limited broadcast) as
+non-global -- it's in Python's own private/reserved block list -- so
+that address needs no extra handling here. Multicast (224.0.0.0/4) is
+the one case `is_global` does NOT cover (a multicast address is
+globally-scoped addressing, just not unicast), so it's excluded
+explicitly: LAN discovery chatter (mDNS to 224.0.0.251, SSDP to
+239.255.255.250, etc.) is routine noise, not an enrichable IOC.
 """
 
 import ipaddress
 
 
 def is_external(ip: str) -> bool:
-    """True only for an address actually allocated for public routing."""
+    """True only for an address actually allocated for public unicast routing."""
     try:
-        return ipaddress.ip_address(ip).is_global
+        addr = ipaddress.ip_address(ip)
+        return addr.is_global and not addr.is_multicast
     except ValueError:
         # Not a parseable IP at all -- treat as not-enrichable rather
         # than raising into a caller that's just trying to render a UI.
