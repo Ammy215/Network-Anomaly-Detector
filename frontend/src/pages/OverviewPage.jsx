@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+import { apiGet } from '../api'
 import Badge from '../components/ui/Badge'
 import Card from '../components/ui/Card'
 import Skeleton from '../components/ui/Skeleton'
@@ -5,6 +7,55 @@ import StatCard from '../components/ui/StatCard'
 import { verdictLabel, verdictTone } from '../severity'
 
 const VERDICT_KEYS = ['true_positive', 'false_positive', 'benign', 'unknown']
+
+const INTEGRATION_LABELS = {
+  mini_siem: 'Mini SIEM',
+  threathunter: 'ThreatHunter',
+}
+
+function IntegrationsCard() {
+  const [status, setStatus] = useState(null)
+
+  useEffect(() => {
+    apiGet('/api/integrations/status')
+      .then(setStatus)
+      .catch(() => setStatus(null))
+  }, [])
+
+  return (
+    <Card delay={0.25}>
+      <h3 className="mb-3 font-sans text-sm font-semibold text-text-primary">Integrations</h3>
+      {!status ? (
+        <Skeleton className="h-8 w-full" />
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          {Object.entries(INTEGRATION_LABELS).map(([key, label]) => {
+            const enabled = Boolean(status[key]?.enabled)
+            return (
+              <div key={key} className="flex items-center gap-2">
+                <Badge
+                  tone={enabled ? 'green' : 'gray'}
+                  title={
+                    enabled
+                      ? 'Configured — delivery on flag/verdict is best-effort, not a confirmed live connection.'
+                      : 'Not configured — set the corresponding URL in backend/.env to enable.'
+                  }
+                >
+                  {enabled ? 'Configured' : 'Not configured'}
+                </Badge>
+                <span className="text-text-primary">{label}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      <p className="mt-3 text-xs text-text-muted">
+        Optional, loosely coupled — NetSentinel works the same whether either is configured. See
+        docs/INTEGRATIONS.md for the event/request schemas.
+      </p>
+    </Card>
+  )
+}
 
 export default function OverviewPage({ allFlows, allFlowsLoading, verdictSummary, activeModel }) {
   const flaggedCount = allFlowsLoading ? null : allFlows.filter((f) => f.is_anomalous).length
@@ -81,6 +132,8 @@ export default function OverviewPage({ allFlows, allFlowsLoading, verdictSummary
           threshold.
         </p>
       </Card>
+
+      <IntegrationsCard />
     </div>
   )
 }

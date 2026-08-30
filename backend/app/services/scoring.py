@@ -1,6 +1,7 @@
 import logging
 
 from app.services import supabase_client
+from app.services.integrations import mini_siem, threathunter
 from app.services.ml.scoring import load_bundle, score_flows
 
 logger = logging.getLogger("netsentinel.scoring")
@@ -17,6 +18,11 @@ def score_new_flows(inserted: list[dict], feature_rows: list[dict]) -> None:
     interrupt a live capture. The flows and their features are already
     safely stored at this point, and train_models.py can always re-score
     everything later.
+
+    This is also the one place Phase 11's outbound integrations trigger
+    from -- both the upload path and live capture funnel through here, so
+    firing here (rather than in either caller) means neither needs any
+    "is this flow flagged" logic of its own.
     """
     try:
         version = supabase_client.get_active_model_version()
@@ -34,5 +40,16 @@ def score_new_flows(inserted: list[dict], feature_rows: list[dict]) -> None:
         supabase_client.insert_flow_scores([
             {**row, "model_version_id": version["id"]} for row in scored
         ])
+
+        flows_by_id = {flow["id"]: flow for flow in enriched}
+        for score_row in scored:
+            if not score_row.get("is_anomalous"):
+                continue
+            flow = flows_by_id.get(score_row["flow_id"])
+            if not flow:
+                continue
+            flagged_flow = {**flow, **score_row}
+            mini_siem.notify_flow_flagged(flagged_flow, version)
+            threathunter.notify_flow_flagged(flagged_flow)
     except Exception as exc:
         logger.warning("Could not score flows: %s", exc)

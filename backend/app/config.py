@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # after a fresh Wireshark install, until the shell/session restarts).
     tshark_path: Optional[str] = None
 
+    # Phase 11 -- optional outbound integrations with the author's other
+    # projects. Both empty/disabled by default; each fires independently
+    # and neither requires or affects the other. See docs/INTEGRATIONS.md.
+    mini_siem_webhook_url: Optional[str] = None
+    threathunter_endpoint_url: Optional[str] = None
+
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.backend_cors_origins.split(",")]

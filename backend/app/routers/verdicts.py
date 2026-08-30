@@ -1,8 +1,11 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
 from app.services import supabase_client
 from app.services.auth import CurrentUser, get_current_user, log_audit, require_role
+from app.services.integrations import mini_siem
 from app.services.supabase_client import VALID_VERDICTS
 
 # No import from app.services.ml, scripts.train_models, or
@@ -10,6 +13,8 @@ from app.services.supabase_client import VALID_VERDICTS
 # only. There is no code path here that touches a model artifact, a
 # threshold, or model_versions.is_active. See docs/PHASE-2-PLAN.md Phase 4
 # ("the system never silently retrains from a click").
+
+logger = logging.getLogger("netsentinel.verdicts")
 
 router = APIRouter(prefix="/api", tags=["verdicts"])
 
@@ -50,6 +55,15 @@ def set_flow_verdict(
         created_by=current_user.email,
     )
     log_audit(request, current_user, "verdict_change", detail={"flow_id": flow_id, "verdict": body.verdict})
+
+    try:
+        flow = supabase_client.get_flow_for_investigation(flow_id)
+        version = supabase_client.get_active_model_version()
+        if flow:
+            mini_siem.notify_verdict_recorded(flow, version, row)
+    except Exception as exc:
+        logger.warning("Could not build/send Mini SIEM verdict event for flow %s: %s", flow_id, exc)
+
     return row
 
 
