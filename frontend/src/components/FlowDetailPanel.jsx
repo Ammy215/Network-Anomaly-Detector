@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiGet, apiPost } from '../api'
+import { useAuth } from '../auth/AuthContext'
 import { featureName, featureValue } from '../featureLabels'
 import { severityBand, verdictLabel, verdictTone } from '../severity'
 import Badge from './ui/Badge'
@@ -15,6 +16,8 @@ const VERDICT_OPTIONS = [
 ]
 
 export default function FlowDetailPanel({ flow, scoredBy, onVerdictSaved }) {
+  const { role } = useAuth()
+  const canSetVerdict = role === 'analyst' || role === 'admin'
   const [breakdown, setBreakdown] = useState(null)
   const [breakdownError, setBreakdownError] = useState(null)
 
@@ -148,57 +151,71 @@ export default function FlowDetailPanel({ flow, scoredBy, onVerdictSaved }) {
 
       <div className="border-t border-border pt-4">
         <h3 className="mb-2 font-sans text-sm font-semibold text-text-primary">Verdict</h3>
-        <div className="mb-3 flex flex-wrap gap-2">
-          {VERDICT_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => setVerdict(opt.value)}
-              className={`rounded border px-2.5 py-1 text-xs font-medium transition-colors ${
-                verdict === opt.value
-                  ? 'border-accent-cyan/40 bg-accent-cyan/10 text-accent-cyan'
-                  : 'border-border text-text-muted hover:border-accent-cyan/30 hover:text-text-primary'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        {missedByModel && (
-          <p className="mb-3 text-accent-amber">
-            This flow was not flagged by the active model (is_anomalous=false) — marking it True
-            Positive records it as a missed detection.
-          </p>
-        )}
-        <textarea
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="Optional note"
-          rows={2}
-          className="mb-3 w-full rounded border border-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted/60"
-        />
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={saveVerdict}
-            disabled={saving}
-            className="rounded-md bg-accent-cyan px-3 py-1.5 text-xs font-semibold text-bg-page disabled:opacity-50"
-          >
-            {saving ? 'Saving...' : 'Save verdict'}
-          </button>
-          {saveError && <span className="text-accent-red">{saveError}</span>}
-          {savedVerdict && (
-            <Badge key={savedVerdict.updated_at} tone={verdictTone(savedVerdict.verdict)}>
-              {verdictLabel(savedVerdict.verdict)} saved
-            </Badge>
-          )}
-          {savedVerdict && (
+        {canSetVerdict ? (
+          <>
+            <div className="mb-3 flex flex-wrap gap-2">
+              {VERDICT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setVerdict(opt.value)}
+                  className={`rounded border px-2.5 py-1 text-xs font-medium transition-colors ${
+                    verdict === opt.value
+                      ? 'border-accent-cyan/40 bg-accent-cyan/10 text-accent-cyan'
+                      : 'border-border text-text-muted hover:border-accent-cyan/30 hover:text-text-primary'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {missedByModel && (
+              <p className="mb-3 text-accent-amber">
+                This flow was not flagged by the active model (is_anomalous=false) — marking it
+                True Positive records it as a missed detection.
+              </p>
+            )}
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Optional note"
+              rows={2}
+              className="mb-3 w-full rounded border border-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted/60"
+            />
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={saveVerdict}
+                disabled={saving}
+                className="rounded-md bg-accent-cyan px-3 py-1.5 text-xs font-semibold text-bg-page disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Save verdict'}
+              </button>
+              {saveError && <span className="text-accent-red">{saveError}</span>}
+              {savedVerdict && (
+                <Badge key={savedVerdict.updated_at} tone={verdictTone(savedVerdict.verdict)}>
+                  {verdictLabel(savedVerdict.verdict)} saved
+                </Badge>
+              )}
+              {savedVerdict && (
+                <span className="text-xs text-text-muted">
+                  last set by {savedVerdict.created_by} at{' '}
+                  {new Date(savedVerdict.updated_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+          </>
+        ) : savedVerdict ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge tone={verdictTone(savedVerdict.verdict)}>{verdictLabel(savedVerdict.verdict)}</Badge>
             <span className="text-xs text-text-muted">
-              last set by {savedVerdict.created_by} at{' '}
-              {new Date(savedVerdict.updated_at).toLocaleString()}
+              set by {savedVerdict.created_by} at {new Date(savedVerdict.updated_at).toLocaleString()}
             </span>
-          )}
-        </div>
+            {savedVerdict.note && <span className="text-xs text-text-muted">— {savedVerdict.note}</span>}
+          </div>
+        ) : (
+          <p className="text-text-muted">No verdict recorded yet.</p>
+        )}
       </div>
 
       {flow.is_anomalous && <ThreatIntel flow={flow} />}

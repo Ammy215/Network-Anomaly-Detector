@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.services.auth import CurrentUser, require_role
 from app.services.rag.retriever import retrieve
 
 router = APIRouter(prefix="/api", tags=["rag"])
@@ -12,10 +13,9 @@ class SearchRequest(BaseModel):
 
 
 @router.post("/rag/search")
-def search_knowledge_base(body: SearchRequest):
-    """Debug/testing endpoint for the Phase 6 retriever -- lets an
-    analyst try their own queries directly, rather than only trusting a
-    reported eval score. No LLM here yet (Phase 7); this returns raw
-    retrieved chunks only.
+def search_knowledge_base(body: SearchRequest, current_user: CurrentUser = Depends(require_role("admin"))):
+    """Debug/testing endpoint for the Phase 6 retriever -- not part of the
+    analyst workflow (Investigation already runs retrieval internally), so
+    restricted to admin rather than every authenticated role.
     """
     return {"query": body.query, "results": retrieve(body.query, top_k=body.top_k)}

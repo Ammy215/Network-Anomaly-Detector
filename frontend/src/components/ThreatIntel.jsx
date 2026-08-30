@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiPost } from '../api'
+import { useAuth } from '../auth/AuthContext'
 import Skeleton from './ui/Skeleton'
 
 const PROVIDER_LABELS = {
@@ -73,6 +74,8 @@ function ProviderFacts({ name, data }) {
 }
 
 export default function ThreatIntel({ flow }) {
+  const { role } = useAuth()
+  const canRun = role === 'analyst' || role === 'admin'
   const [state, setState] = useState(null)
   const [error, setError] = useState(null)
   const [fetching, setFetching] = useState(false)
@@ -105,17 +108,21 @@ export default function ThreatIntel({ flow }) {
         <div>
           <p className="mb-2 text-text-muted">
             External IP: <span className="font-mono text-text-primary">{state.ip}</span> — not yet
-            checked. Checking spends real API quota against free-tier daily limits, so it only
-            happens on request.
+            checked.
+            {canRun
+              ? ' Checking spends real API quota against free-tier daily limits, so it only happens on request.'
+              : ' Viewing is read-only — running a new check requires an analyst or admin.'}
           </p>
-          <button
-            type="button"
-            onClick={() => check(true)}
-            disabled={fetching}
-            className="rounded-md bg-accent-cyan px-3 py-1.5 text-xs font-semibold text-bg-page disabled:opacity-50"
-          >
-            {fetching ? 'Enriching...' : 'Enrich'}
-          </button>
+          {canRun && (
+            <button
+              type="button"
+              onClick={() => check(true)}
+              disabled={fetching}
+              className="rounded-md bg-accent-cyan px-3 py-1.5 text-xs font-semibold text-bg-page disabled:opacity-50"
+            >
+              {fetching ? 'Enriching...' : 'Enrich'}
+            </button>
+          )}
         </div>
       )}
 

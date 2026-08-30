@@ -1,13 +1,15 @@
 const NAV_ITEMS = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'flows', label: 'Flows' },
-  { key: 'investigations', label: 'Investigations' },
-  { key: 'models', label: 'Model dashboard' },
+  { key: 'overview', label: 'Overview', roles: ['admin', 'analyst', 'viewer'] },
+  { key: 'flows', label: 'Flows', roles: ['admin', 'analyst', 'viewer'] },
+  { key: 'investigations', label: 'Investigations', roles: ['admin', 'analyst', 'viewer'] },
+  { key: 'models', label: 'Model dashboard', roles: ['admin', 'analyst', 'viewer'] },
+  { key: 'admin', label: 'Admin panel', roles: ['admin'] },
 ]
 
-export default function Sidebar({ active, onNavigate, health, healthError }) {
+export default function Sidebar({ active, onNavigate, health, healthError, role, userEmail, onSignOut }) {
   const dotTone = healthError ? 'bg-accent-red' : health === 'ok' ? 'bg-accent-green' : 'bg-accent-amber'
   const statusText = healthError ? 'backend unreachable' : health === 'ok' ? 'backend online' : 'checking...'
+  const visibleItems = NAV_ITEMS.filter((item) => item.roles.includes(role))
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-bg-card">
@@ -16,7 +18,7 @@ export default function Sidebar({ active, onNavigate, health, healthError }) {
         <p className="mt-0.5 text-xs text-text-muted">Network anomaly detection</p>
       </div>
       <nav className="flex flex-1 flex-col gap-1 px-2 py-3">
-        {NAV_ITEMS.map((item) => (
+        {visibleItems.map((item) => (
           <button
             key={item.key}
             type="button"
@@ -31,9 +33,28 @@ export default function Sidebar({ active, onNavigate, health, healthError }) {
           </button>
         ))}
       </nav>
-      <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs">
-        <span className={`h-2 w-2 rounded-full ${dotTone}`} />
-        <span className="text-text-muted">{statusText}</span>
+      <div className="border-t border-border px-4 py-3">
+        <div className="flex items-center gap-2 text-xs">
+          <span className={`h-2 w-2 rounded-full ${dotTone}`} />
+          <span className="text-text-muted">{statusText}</span>
+        </div>
+        {userEmail && (
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate font-mono text-xs text-text-primary" title={userEmail}>
+                {userEmail}
+              </p>
+              <p className="text-xs uppercase tracking-wide text-text-muted">{role}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="shrink-0 rounded border border-border px-2 py-1 text-xs text-text-muted hover:border-accent-red/40 hover:text-accent-red"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   )

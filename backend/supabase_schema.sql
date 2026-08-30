@@ -247,3 +247,60 @@ create table if not exists investigations (
   fetched_at timestamptz not null default now()
 );
 grant select, insert, update, delete on public.investigations to service_role;
+
+-- NetSentinel — Phase 9: auth, roles, and audit log
+-- Run once in the Supabase SQL editor. Idempotent -- safe to re-run.
+--
+-- Role lives here, not in the JWT: the backend looks up user_profiles on
+-- every request rather than trusting a custom JWT claim, so an admin
+-- promotion (a manual dashboard edit) takes effect on the promoted user's
+-- very next request instead of waiting for their token to expire/refresh.
+
+create table if not exists user_profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text not null,
+  role text not null default 'analyst' check (role in ('admin', 'analyst', 'viewer')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+grant select, insert, update, delete on public.user_profiles to service_role;
+
+-- Auto-creates a profile (default role: analyst) the moment someone signs
+-- up via Supabase Auth. Admin is never self-assigned at signup -- it's
+-- only ever granted afterward, by hand, in the Supabase dashboard.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.user_profiles (id, email)
+  values (new.id, new.email);
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+create table if not exists audit_log (
+  id bigint generated always as identity primary key,
+  user_id uuid references auth.users(id) on delete set null,
+  user_email text not null,
+  action text not null,
+  detail jsonb,
+  ip_address text,
+  created_at timestamptz not null default now()
+);
+create index if not exists audit_log_created_at_idx on audit_log (created_at desc);
+create index if not exists audit_log_user_idx on audit_log (user_id);
+grant select, insert, update, delete on public.audit_log to service_role;
+grant usage, select on sequence audit_log_id_seq to service_role;
+
+-- Same RLS rationale as every table above: enabled with no public-facing
+-- policies, because the FastAPI backend is the only thing that ever reads
+-- or writes these tables, always via the service_role key (bypasses RLS).
+-- The frontend talks to Supabase Auth directly (a separate, RLS-independent
+-- API) but never queries these tables directly.

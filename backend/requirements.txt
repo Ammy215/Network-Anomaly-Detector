@@ -11,4 +11,5 @@ scikit-learn
 chromadb  # local vector DB for RAG retrieval; bundled embedding model runs via onnxruntime, no API key
 langgraph  # Phase 7 -- orchestrates the classify/retrieve/explain/self_check investigation pipeline
 groq  # Phase 7 -- LLM provider; free tier, no-training-on-data policy (see docs/PROJECT.md decision log)
+pyjwt  # Phase 9 -- verifies Supabase Auth JWTs (ES256) against the project's public JWKS endpoint via PyJWKClient
 pytest

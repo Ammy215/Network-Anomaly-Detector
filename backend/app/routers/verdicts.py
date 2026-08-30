@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
 from app.services import supabase_client
+from app.services.auth import CurrentUser, get_current_user, log_audit, require_role
 from app.services.supabase_client import VALID_VERDICTS
 
 # No import from app.services.ml, scripts.train_models, or
@@ -11,8 +12,6 @@ from app.services.supabase_client import VALID_VERDICTS
 # ("the system never silently retrains from a click").
 
 router = APIRouter(prefix="/api", tags=["verdicts"])
-
-PLACEHOLDER_ANALYST = "local-analyst"  # single-user placeholder; real auth is Phase 9
 
 
 class VerdictIn(BaseModel):
@@ -28,7 +27,12 @@ class VerdictIn(BaseModel):
 
 
 @router.post("/flows/{flow_id}/verdict")
-def set_flow_verdict(flow_id: str, body: VerdictIn):
+def set_flow_verdict(
+    flow_id: str,
+    body: VerdictIn,
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("analyst", "admin")),
+):
     """Records the analyst's ground-truth judgement on a flow.
 
     Deliberately independent of whether the model flagged the flow --
@@ -43,13 +47,14 @@ def set_flow_verdict(flow_id: str, body: VerdictIn):
         flow_id=flow_id,
         verdict=body.verdict,
         note=body.note,
-        created_by=PLACEHOLDER_ANALYST,
+        created_by=current_user.email,
     )
+    log_audit(request, current_user, "verdict_change", detail={"flow_id": flow_id, "verdict": body.verdict})
     return row
 
 
 @router.get("/verdicts/summary")
-def get_verdicts_summary():
+def get_verdicts_summary(current_user: CurrentUser = Depends(get_current_user)):
     """Counts only -- recorded for review, never used to retrain or
     adjust the active model's threshold.
     """

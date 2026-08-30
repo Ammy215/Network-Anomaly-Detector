@@ -1,12 +1,13 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.services import supabase_client
+from app.services.auth import CurrentUser, get_current_user
 
 router = APIRouter(prefix="/api", tags=["models"])
 
 
 @router.get("/models")
-def list_models():
+def list_models(current_user: CurrentUser = Depends(get_current_user)):
     """The model registry / comparison table.
 
     Returns every trained version, newest first, with its full metrics --
@@ -17,7 +18,7 @@ def list_models():
 
 
 @router.get("/models/{version_id}")
-def get_model(version_id: str):
+def get_model(version_id: str, current_user: CurrentUser = Depends(get_current_user)):
     version = supabase_client.get_model_version(version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Model version not found.")
@@ -25,7 +26,7 @@ def get_model(version_id: str):
 
 
 @router.get("/flows/{flow_id}/score")
-def get_flow_score(flow_id: str):
+def get_flow_score(flow_id: str, current_user: CurrentUser = Depends(get_current_user)):
     """Per-flow scores with the features that drove them.
 
     Never returns a bare "anomalous" verdict -- every score comes with the

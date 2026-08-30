@@ -4,10 +4,11 @@ import shutil
 from pathlib import Path
 
 import pyshark
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 
 from app.config import settings
 from app.services import supabase_client
+from app.services.auth import CurrentUser, get_current_user, log_audit, require_role
 from app.services.feature_extraction import compute_features
 from app.services.flow_assembly import assemble_flows
 from app.services.host_profiles import compute_host_profiles
@@ -74,7 +75,11 @@ def _score_new_flows(inserted: list[dict], feature_rows: list[dict]) -> None:
 
 
 @router.post("/pcap/upload")
-def upload_pcap(file: UploadFile):
+def upload_pcap(
+    file: UploadFile,
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("analyst", "admin")),
+):
     if not has_allowed_extension(file.filename):
         raise HTTPException(status_code=400, detail="File must be a .pcap or .pcapng file.")
 
@@ -131,6 +136,10 @@ def upload_pcap(file: UploadFile):
 
         _score_new_flows(inserted, feature_rows)
 
+        log_audit(
+            request, current_user, "pcap_upload",
+            detail={"filename": file.filename, "flow_count": len(inserted)},
+        )
         return {"flow_count": len(inserted), "flows": inserted}
 
     except PcapValidationError as exc:
@@ -140,7 +149,11 @@ def upload_pcap(file: UploadFile):
 
 
 @router.get("/flows")
-def get_flows(source_file: str | None = None, sort: str = "started_desc"):
+def get_flows(
+    source_file: str | None = None,
+    sort: str = "started_desc",
+    current_user: CurrentUser = Depends(get_current_user),
+):
     """Flows with their anomaly scores.
 
     `scored_by` names which model produced the scores. Two algorithms
@@ -172,6 +185,6 @@ def get_flows(source_file: str | None = None, sort: str = "started_desc"):
 
 
 @router.get("/flows/source-files")
-def get_source_files():
+def get_source_files(current_user: CurrentUser = Depends(get_current_user)):
     """Distinct source_file values, for the flows table's filter dropdown."""
     return {"source_files": supabase_client.list_source_files()}

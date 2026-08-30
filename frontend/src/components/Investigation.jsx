@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiPost } from '../api'
+import { useAuth } from '../auth/AuthContext'
 import Badge from './ui/Badge'
 import ConfidenceBar from './ui/ConfidenceBar'
 import Skeleton from './ui/Skeleton'
@@ -85,6 +86,8 @@ function SelfCheckBanner({ selfCheck }) {
 }
 
 export default function Investigation({ flow }) {
+  const { role } = useAuth()
+  const canRun = role === 'analyst' || role === 'admin'
   const [state, setState] = useState(null)
   const [error, setError] = useState(null)
   const [fetching, setFetching] = useState(false)
@@ -122,17 +125,21 @@ export default function Investigation({ flow }) {
       {state && !state.cached && (
         <div>
           <p className="mb-2 text-text-muted">
-            Not yet investigated. Running this calls a free-tier LLM (Groq) three times
-            (classify, explain, self-check), so it only happens on request.
+            Not yet investigated.
+            {canRun
+              ? ' Running this calls a free-tier LLM (Groq) three times (classify, explain, self-check), so it only happens on request.'
+              : ' Viewing is read-only — running a new investigation requires an analyst or admin.'}
           </p>
-          <button
-            type="button"
-            onClick={() => check(true)}
-            disabled={fetching}
-            className="rounded-md bg-accent-purple px-3 py-1.5 text-xs font-semibold text-bg-page disabled:opacity-50"
-          >
-            {fetching ? 'Investigating...' : 'Investigate'}
-          </button>
+          {canRun && (
+            <button
+              type="button"
+              onClick={() => check(true)}
+              disabled={fetching}
+              className="rounded-md bg-accent-purple px-3 py-1.5 text-xs font-semibold text-bg-page disabled:opacity-50"
+            >
+              {fetching ? 'Investigating...' : 'Investigate'}
+            </button>
+          )}
         </div>
       )}
 

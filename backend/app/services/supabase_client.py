@@ -14,6 +14,8 @@ FLOW_SCORES_TABLE = "flow_scores"
 FLOW_VERDICTS_TABLE = "flow_verdicts"
 IP_ENRICHMENTS_TABLE = "ip_enrichments"
 INVESTIGATIONS_TABLE = "investigations"
+USER_PROFILES_TABLE = "user_profiles"
+AUDIT_LOG_TABLE = "audit_log"
 
 # Mirrors the flow_verdicts.verdict CHECK constraint in supabase_schema.sql
 # -- kept here too so the API can reject an invalid value with a clean 422
@@ -607,6 +609,66 @@ def upsert_investigation(flow_id: str, result: dict) -> dict:
         .execute()
     )
     return upserted.data[0] if upserted.data else row
+
+
+def get_user_profile(user_id: str) -> dict | None:
+    result = get_client().table(USER_PROFILES_TABLE).select("*").eq("id", user_id).execute()
+    return result.data[0] if result.data else None
+
+
+def list_user_profiles() -> list[dict]:
+    """Every user with their current role, oldest signup first -- the
+    admin panel's user list.
+    """
+    result = (
+        get_client()
+        .table(USER_PROFILES_TABLE)
+        .select("*")
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return result.data
+
+
+def update_user_role(user_id: str, role: str) -> dict | None:
+    result = (
+        get_client()
+        .table(USER_PROFILES_TABLE)
+        .update({"role": role, "updated_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", user_id)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def insert_audit_log(
+    user_id: str,
+    user_email: str,
+    action: str,
+    detail: dict | None,
+    ip_address: str | None,
+) -> dict:
+    row = {
+        "user_id": user_id,
+        "user_email": user_email,
+        "action": action,
+        "detail": detail,
+        "ip_address": ip_address,
+    }
+    result = get_client().table(AUDIT_LOG_TABLE).insert(row).execute()
+    return result.data[0] if result.data else row
+
+
+def list_audit_log(limit: int = 200, offset: int = 0) -> list[dict]:
+    result = (
+        get_client()
+        .table(AUDIT_LOG_TABLE)
+        .select("*")
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return result.data
 
 
 def upsert_enrichment(ip: str, providers: dict) -> dict:

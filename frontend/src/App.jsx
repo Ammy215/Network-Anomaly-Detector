@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
-import { apiGet } from './api'
+import { apiGet, apiPostForm } from './api'
+import { useAuth } from './auth/AuthContext'
 import Sidebar from './components/layout/Sidebar'
 import OverviewPage from './pages/OverviewPage'
 import FlowsPage from './pages/FlowsPage'
 import InvestigationsPage from './pages/InvestigationsPage'
 import ModelDashboardPage from './pages/ModelDashboardPage'
+import AdminPage from './pages/AdminPage'
+import AuthScreen from './pages/AuthScreen'
 
 async function fetchAllFlows(sourceFiles, signal) {
   const results = await Promise.all(
@@ -13,7 +16,8 @@ async function fetchAllFlows(sourceFiles, signal) {
   return results.flatMap((r) => r.flows)
 }
 
-function App() {
+function AuthedApp() {
+  const { role, user, signOut } = useAuth()
   const [activePage, setActivePage] = useState('overview')
 
   const [health, setHealth] = useState('loading')
@@ -90,12 +94,7 @@ function App() {
     const formData = new FormData()
     formData.append('file', file)
 
-    fetch('http://localhost:8000/api/pcap/upload', { method: 'POST', body: formData })
-      .then(async (res) => {
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.detail || `Request failed: ${res.status}`)
-        return data
-      })
+    apiPostForm('/api/pcap/upload', formData)
       .then((data) => {
         setUploadMessage(`Parsed ${data.flow_count} flow(s) from ${file.name}.`)
         setDataVersion((v) => v + 1)
@@ -105,31 +104,45 @@ function App() {
   }
 
   const activeModel = models?.find((m) => m.is_active) ?? null
+  // viewer is read-only everywhere -- the upload form doesn't just disable
+  // for a viewer, it isn't rendered at all (server-enforces the same
+  // boundary on /api/pcap/upload, this is UI-hiding on top of that).
+  const canWrite = role === 'analyst' || role === 'admin'
 
   return (
     <div className="flex min-h-screen bg-bg-page text-text-primary">
-      <Sidebar active={activePage} onNavigate={setActivePage} health={health} healthError={healthError} />
+      <Sidebar
+        active={activePage}
+        onNavigate={setActivePage}
+        health={health}
+        healthError={healthError}
+        role={role}
+        userEmail={user?.email}
+        onSignOut={signOut}
+      />
 
       <main className="flex-1 overflow-x-auto">
-        <div className="flex flex-wrap items-center gap-3 border-b border-border bg-bg-card px-6 py-3">
-          <form onSubmit={handleUpload} className="flex items-center gap-3">
-            <input
-              type="file"
-              accept=".pcap,.pcapng"
-              onChange={(e) => setFile(e.target.files[0] ?? null)}
-              className="text-xs text-text-muted"
-            />
-            <button
-              type="submit"
-              disabled={!file || uploading}
-              className="rounded-md bg-accent-cyan px-3 py-1.5 text-xs font-semibold text-bg-page disabled:opacity-50"
-            >
-              {uploading ? 'Uploading...' : 'Upload PCAP'}
-            </button>
-          </form>
-          {uploadError && <span className="text-xs text-accent-red">{uploadError}</span>}
-          {uploadMessage && <span className="text-xs text-accent-green">{uploadMessage}</span>}
-        </div>
+        {canWrite && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-border bg-bg-card px-6 py-3">
+            <form onSubmit={handleUpload} className="flex items-center gap-3">
+              <input
+                type="file"
+                accept=".pcap,.pcapng"
+                onChange={(e) => setFile(e.target.files[0] ?? null)}
+                className="text-xs text-text-muted"
+              />
+              <button
+                type="submit"
+                disabled={!file || uploading}
+                className="rounded-md bg-accent-cyan px-3 py-1.5 text-xs font-semibold text-bg-page disabled:opacity-50"
+              >
+                {uploading ? 'Uploading...' : 'Upload PCAP'}
+              </button>
+            </form>
+            {uploadError && <span className="text-xs text-accent-red">{uploadError}</span>}
+            {uploadMessage && <span className="text-xs text-accent-green">{uploadMessage}</span>}
+          </div>
+        )}
 
         <div className="p-6">
           {activePage === 'overview' && (
@@ -145,10 +158,27 @@ function App() {
             <InvestigationsPage allFlows={allFlows} allFlowsLoading={allFlowsLoading} />
           )}
           {activePage === 'models' && <ModelDashboardPage models={models} />}
+          {/* Defensive re-check even though Sidebar already hides this nav
+              item for non-admins -- the server is still the real gate. */}
+          {activePage === 'admin' && role === 'admin' && <AdminPage />}
         </div>
       </main>
     </div>
   )
 }
 
-export default App
+export default function App() {
+  const { session, role, loading } = useAuth()
+
+  if (!session) return <AuthScreen />
+
+  if (loading || !role) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-page text-sm text-text-muted">
+        Loading your account...
+      </div>
+    )
+  }
+
+  return <AuthedApp />
+}

@@ -142,8 +142,19 @@ export default function FlowsPage() {
           silently inheriting the table's full scrolled-content width and
           getting clipped at the viewport edge (e.g. the score breakdown's
           "Direction" column was invisible without scrolling right). Pinning
-          it to the container's actual visible inline size fixes that. */}
-      <Card className="overflow-x-auto !p-0 [container-type:inline-size]" delay={0.05}>
+          it to the container's actual visible inline size fixes that.
+
+          `max-h-[70vh] overflow-y-auto` is a second, separate fix: the
+          default (unfiltered) view can hold 500 rows, making this Card
+          ~28,000px tall with nothing bounding it -- its own horizontal
+          scrollbar sat at the very bottom of that, effectively unreachable
+          without first scrolling the whole page down thousands of pixels.
+          Bounding the Card's height keeps its horizontal scrollbar visible
+          near the top of the page, where a user can actually find it. */}
+      <Card
+        className="overflow-x-auto overflow-y-auto !p-0 [container-type:inline-size] scroll-visible max-h-[70vh]"
+        delay={0.05}
+      >
         <table className="w-full border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-border text-xs uppercase tracking-wide text-text-muted">
