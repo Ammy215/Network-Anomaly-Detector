@@ -501,6 +501,23 @@ def get_flow_with_score(flow_id: str) -> dict | None:
     return flow
 
 
+def _is_duplicate_key_error(exc: Exception) -> bool:
+    """True only for Postgres unique-violation (SQLSTATE 23505).
+
+    Checked by code first, with a message fallback, because postgrest-py
+    surfaces errors as an APIError carrying a dict rather than a typed
+    exception per SQLSTATE -- and misclassifying here would turn a genuine
+    write failure into a silent overwrite.
+    """
+    code = getattr(exc, "code", None)
+    if code == "23505":
+        return True
+    details = getattr(exc, "args", None)
+    if details and isinstance(details[0], dict) and details[0].get("code") == "23505":
+        return True
+    return "23505" in str(exc) or "duplicate key" in str(exc).lower()
+
+
 def get_flow_verdict(flow_id: str) -> dict | None:
     """The current verdict row for a flow, or None if never marked."""
     result = (
@@ -515,46 +532,76 @@ def get_flow_verdict(flow_id: str) -> dict | None:
 
 
 def upsert_flow_verdict(flow_id: str, verdict: str, note: str | None, actor: str) -> tuple[dict, dict | None]:
-    """One row per flow -- upsert on flow_id, so re-marking a flow
-    overwrites its existing verdict rather than creating a duplicate.
+    """One row per flow -- re-marking a flow overwrites its existing
+    verdict rather than creating a duplicate.
 
-    `created_at` is deliberately never included in this payload: Postgrest
-    only overwrites the columns present in an upsert, so on a re-mark the
-    original insert timestamp is left untouched; the column default only
-    ever fires on first insert.
+    Overwriting is deliberately allowed (a senior analyst correcting a
+    junior's call is legitimate review), but it must never rewrite
+    *authorship*: `created_by` and `created_at` always belong to whoever
+    marked the flow first, and whoever changed it afterwards is recorded
+    in `updated_by` and in the audit log. Returns (new_row, previous_row)
+    so the caller can audit what was replaced.
 
-    `created_by` is treated the same way, and that is a fix rather than a
-    detail: it previously WAS overwritten, so re-marking someone else's
-    verdict rewrote the author while keeping their original timestamp --
-    the row then claimed the first analyst had made a call they never made.
-    Overwriting is still allowed (a senior analyst correcting a call is
-    legitimate review), but the original author is now preserved and the
-    person who changed it is recorded separately in `updated_by`.
-    Returns (new_row, previous_row) so the caller can audit what was
-    replaced. See docs/SECURITY-TESTING-NOTES.md, F1.
+    **Why insert-then-update instead of a single upsert.** The previous
+    version read the row, then upserted, deciding whether to include
+    `created_by` based on that read. Between those two round-trips -- a
+    gap of hundreds of milliseconds at real Supabase latency -- a second
+    concurrent first-time verdict could read the same empty result, so
+    BOTH writers included `created_by`, and the second one's upsert became
+    an UPDATE that overwrote the first one's authorship while keeping the
+    first one's `created_at`. That is exactly the forged-attribution bug
+    F1 fixed, reachable again through the concurrency window, and it also
+    defeated the audit trail: the overwriting request saw `previous=None`,
+    so it logged nothing about the overwrite (Phase 13.5, D2).
 
-    Who *changed* an existing verdict is recorded in the audit log rather
-    than on the row itself. supabase_schema.sql carries an optional
-    `updated_by` column for that, but it is deliberately not written here:
-    this fix must hold on an install that has not run the migration, and
-    the accountability requirement is already met by the audit entry.
+    The fix makes the primary key itself the serialization point rather
+    than a prior read. Exactly one concurrent INSERT can win; every loser
+    gets a duplicate-key error and falls through to an UPDATE that never
+    touches `created_by`. No transaction or advisory lock is needed, which
+    matters because PostgREST exposes neither.
     """
+    now = datetime.now(timezone.utc).isoformat()
+    client = get_client()
+
+    # Path 1: try to be the first writer. The PK on flow_id decides this,
+    # not a read we did earlier and hoped was still true.
+    try:
+        inserted = (
+            client.table(FLOW_VERDICTS_TABLE)
+            .insert({
+                "flow_id": flow_id,
+                "verdict": verdict,
+                "note": note,
+                "created_by": actor,
+                "updated_by": actor,
+                "updated_at": now,
+            })
+            .execute()
+        )
+        if inserted.data:
+            return inserted.data[0], None
+    except Exception as exc:
+        # Anything that isn't the expected "row already exists" is a real
+        # failure and must not be silently turned into an update.
+        if not _is_duplicate_key_error(exc):
+            raise
+
+    # Path 2: a row already exists, so we are amending someone's verdict
+    # (possibly our own). Read it for the audit trail, then update WITHOUT
+    # created_by/created_at so the original author survives.
     previous = get_flow_verdict(flow_id)
-    row = {
-        "flow_id": flow_id,
-        "verdict": verdict,
-        "note": note,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if previous is None:
-        row["created_by"] = actor
-    result = (
-        get_client()
-        .table(FLOW_VERDICTS_TABLE)
-        .upsert(row, on_conflict="flow_id")
+    updated = (
+        client.table(FLOW_VERDICTS_TABLE)
+        .update({
+            "verdict": verdict,
+            "note": note,
+            "updated_by": actor,
+            "updated_at": now,
+        })
+        .eq("flow_id", flow_id)
         .execute()
     )
-    return (result.data[0] if result.data else {}), previous
+    return (updated.data[0] if updated.data else {}), previous
 
 
 def get_verdict_summary() -> dict:

@@ -24,9 +24,7 @@ import threading
 import time
 from collections import defaultdict, deque
 
-from fastapi import Depends, HTTPException
-
-from app.services.auth import CurrentUser, get_current_user
+from fastapi import HTTPException
 
 # (max_requests, window_seconds), keyed by a caller-chosen bucket name.
 # Set from what the endpoint actually costs, not a round number: the two
@@ -67,43 +65,25 @@ def reset() -> None:
 
 
 def enforce(bucket: str, user_id: str) -> None:
-    """Imperative form, for endpoints where only one branch is expensive.
+    """Charge one hit against a single named bucket, 429 if over.
 
-    `investigate` and `enrichment` both take a `fetch` flag: fetch=false is
-    a free cache peek, fetch=true is what spends Groq / threat-intel quota.
-    A dependency runs before that flag can be inspected, so charging there
-    would bill a read-only peek against the spend budget. Called from
-    inside the handler, on the expensive branch only.
+    Charges ONLY the named bucket. The cross-endpoint `global` bucket is
+    charged centrally in `app.services.auth.user_from_raw_token()`, which
+    every authenticated request passes through -- so it is not repeated
+    here (that would double-count the spend endpoints).
+
+    Called imperatively from inside a handler rather than as a dependency
+    because `investigate` and `enrichment` both take a `fetch` flag:
+    fetch=false is a free cache peek, fetch=true is what spends Groq /
+    threat-intel quota. A dependency runs before that flag can be
+    inspected, so charging there would bill a read-only peek against the
+    spend budget.
     """
-    for name in ("global", bucket):
-        allowed, retry_after = _check(name, user_id)
-        if not allowed:
-            max_requests, window = LIMITS[name]
-            raise HTTPException(
-                status_code=429,
-                detail=f"Rate limit exceeded ({max_requests} per {window}s). Retry in {retry_after}s.",
-                headers={"Retry-After": str(retry_after)},
-            )
-
-
-def rate_limit(bucket: str):
-    """Dependency factory. Counts per (bucket, user id), and also against a
-    shared 'global' bucket so a caller cannot spread an attack thinly
-    across many different endpoints and stay under every individual limit.
-    """
-    if bucket not in LIMITS:
-        raise ValueError(f"unknown rate-limit bucket: {bucket}")
-
-    def checker(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-        for name in ("global", bucket):
-            allowed, retry_after = _check(name, current_user.id)
-            if not allowed:
-                max_requests, window = LIMITS[name]
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"Rate limit exceeded ({max_requests} per {window}s). Retry in {retry_after}s.",
-                    headers={"Retry-After": str(retry_after)},
-                )
-        return current_user
-
-    return checker
+    allowed, retry_after = _check(bucket, user_id)
+    if not allowed:
+        max_requests, window = LIMITS[bucket]
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded ({max_requests} per {window}s). Retry in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        )

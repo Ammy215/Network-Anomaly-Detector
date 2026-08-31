@@ -1,4 +1,5 @@
 import logging
+import re
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,44 @@ from app.routers import admin, auth, capture, enrichment, integrations, investig
 # WARNING and every netsentinel.* logger.info() call (scoring, pcap,
 # enrichment) was silently dropped -- not just new to this phase.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
+
+class _RedactQueryTokenFilter(logging.Filter):
+    """Strip `?token=<jwt>` out of anything we log.
+
+    The SSE endpoint (/api/capture/stream) has to take its bearer token in
+    the query string because EventSource cannot set headers -- a trade-off
+    Phase 10 accepted and Phase 12 documented. What neither checked is
+    where that token then *lands*: uvicorn's access logger writes the full
+    request line, query string included, so every stream connection was
+    writing a live, ~1h-valid credential into the log in plaintext.
+    Verified by grepping the log for a token fragment and finding it.
+
+    That is a bigger deal deployed than locally: hosted platforms
+    aggregate stdout into retained, searchable log services that are
+    often readable by more people than the database is. This does not
+    change the URL contract -- it only ensures the credential never
+    reaches a log sink. (docs/PRE-DEPLOYMENT-READINESS.md, D5.)
+    """
+
+    _PATTERN = re.compile(r"(token=)[^&\s\"']+", re.IGNORECASE)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                self._PATTERN.sub(r"\1[REDACTED]", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        if isinstance(record.msg, str) and "token=" in record.msg:
+            record.msg = self._PATTERN.sub(r"\1[REDACTED]", record.msg)
+        return True
+
+
+# uvicorn.access is the one that writes the request line; the root logger
+# catches anything of ours that ever formats a URL into a message.
+_redactor = _RedactQueryTokenFilter()
+logging.getLogger("uvicorn.access").addFilter(_redactor)
+logging.getLogger().addFilter(_redactor)
 
 # Phase 12 (F8): the interactive docs publish every route, body schema, and
 # role-gated path to anyone who can reach the port, unauthenticated. That's

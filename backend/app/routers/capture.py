@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.services import live_capture
+from app.services import live_capture, rate_limit
 from app.services.auth import (
     CurrentUser,
     get_current_user,
@@ -42,6 +42,11 @@ def start_capture(
     request: Request,
     current_user: CurrentUser = Depends(require_role("analyst", "admin")),
 ):
+    # The `capture` bucket existed in LIMITS from Phase 12 but was never
+    # actually wired to anything, leaving start/stop unthrottled against a
+    # process-wide singleton (Phase 13.5, D1).
+    rate_limit.enforce("capture", current_user.id)
+
     session = live_capture.get_session()
     try:
         result = session.start(body.interface, current_user.email)
@@ -61,6 +66,8 @@ def stop_capture(
     request: Request,
     current_user: CurrentUser = Depends(require_role("analyst", "admin")),
 ):
+    rate_limit.enforce("capture", current_user.id)
+
     session = live_capture.get_session()
     try:
         result = session.stop()

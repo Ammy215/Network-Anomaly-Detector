@@ -9,7 +9,7 @@ from jwt import PyJWKClient
 from pydantic import BaseModel
 
 from app.config import settings
-from app.services import supabase_client
+from app.services import rate_limit, supabase_client
 
 logger = logging.getLogger("netsentinel.auth")
 
@@ -26,24 +26,62 @@ def _project_url() -> str:
     return settings.supabase_url if settings.supabase_url.startswith("http") else f"https://{settings.supabase_url}"
 
 
+# How long a fetched JWKS key set is trusted before it is re-fetched.
+# PyJWKClient defaults to 300s, which meant the network path below was
+# exercised every five minutes in normal operation -- and each of those
+# fetches measured ~1.1s even on a healthy connection. An hour still picks
+# up a Supabase signing-key rotation without a restart (rotation is a rare,
+# deliberate admin action), while cutting the exposure to a transient
+# network failure by ~12x. See docs/PRE-DEPLOYMENT-READINESS.md, D4.
+JWKS_CACHE_SECONDS = 3600
+# Default is 30s, long enough that one blip blocks a request for half a
+# minute. Measured JWKS latency is ~0.8-1.6s, so 10s is ample headroom.
+JWKS_FETCH_TIMEOUT_SECONDS = 10
+
+
 @lru_cache
 def _jwks_client() -> PyJWKClient:
     """One shared client per process. This project's Auth signing keys are
     asymmetric (ES256) -- Supabase's JWKS endpoint only ever publishes
     public keys, never a shared secret, which is what makes verifying a
     token here possible without calling back to Supabase for every
-    request. PyJWKClient caches the fetched key set for 5 minutes
-    (its default `lifespan`), so this is a local check almost all the
-    time, and it also means a signing-key rotation is picked up
-    automatically within that window -- no backend restart required,
-    unlike a static secret.
+    request. The fetched key set is cached (see JWKS_CACHE_SECONDS), so
+    this is a local check almost all the time, and a signing-key rotation
+    is still picked up automatically within that window -- no backend
+    restart required, unlike a static secret.
     """
-    return PyJWKClient(f"{_project_url()}/auth/v1/.well-known/jwks.json")
+    return PyJWKClient(
+        f"{_project_url()}/auth/v1/.well-known/jwks.json",
+        lifespan=JWKS_CACHE_SECONDS,
+        timeout=JWKS_FETCH_TIMEOUT_SECONDS,
+    )
 
 
 def _decode_token(token: str) -> dict:
+    """Verify a token, distinguishing "this token is bad" from "we could
+    not reach the key server".
+
+    Those two are very different and used to be reported identically.
+    PyJWKClientConnectionError means the JWKS fetch itself failed -- the
+    caller's session may be perfectly valid, and telling them it expired
+    sends them to re-authenticate, which cannot help because the fault is
+    server-side. That is a 503. A key set we DID fetch but which has no
+    matching `kid`, an expired token, a bad signature, a wrong audience --
+    those are all genuinely the caller's problem, and stay 401.
+    (docs/PRE-DEPLOYMENT-READINESS.md, D4.)
+    """
     try:
         signing_key = _jwks_client().get_signing_key_from_jwt(token)
+    except jwt.PyJWKClientConnectionError as exc:
+        logger.warning("JWKS key-set fetch failed -- returning 503, not 401: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable. Please retry.",
+        ) from exc
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.") from exc
+
+    try:
         return jwt.decode(
             token,
             signing_key.key,
@@ -72,6 +110,19 @@ def user_from_raw_token(token: str) -> CurrentUser:
     email = payload.get("email")
     if not user_id or not email:
         raise HTTPException(status_code=401, detail="Invalid session token.")
+
+    # The cross-endpoint per-user cap, charged here rather than per-route.
+    # This is the only place EVERY authenticated request provably passes
+    # through -- header auth and the SSE `?token=` path both land here --
+    # so it is the one spot where a "global" bucket actually earns that
+    # name. Previously the bucket existed but was only ever charged inside
+    # enforce() on three spend endpoints, which left /api/flows,
+    # /api/admin/*, /api/rag/search and /api/capture/* entirely
+    # unthrottled while the docs claimed otherwise (Phase 13.5, D1).
+    #
+    # Deliberately before the profile lookup: a caller who is already over
+    # the cap shouldn't cost a Supabase round-trip to find out.
+    rate_limit.enforce("global", user_id)
 
     profile = supabase_client.get_user_profile(user_id)
     if not profile:
