@@ -39,7 +39,7 @@ export default function AuthScreen() {
       <div className="w-full max-w-sm rounded-lg border border-border bg-bg-card p-6">
         <h1 className="mb-1 font-sans text-xl font-bold text-text-primary">NetSentinel</h1>
         <p className="mb-6 text-sm text-text-muted">
-          {mode === 'login' ? 'Sign in to continue.' : 'Create an account (new accounts start as analyst).'}
+          {mode === 'login' ? 'Sign in to continue.' : 'Create an account (new accounts start as viewer).'}
         </p>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">

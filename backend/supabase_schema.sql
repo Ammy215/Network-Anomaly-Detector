@@ -283,9 +283,10 @@ grant select, insert, update, delete on public.user_profiles to service_role;
 -- if-not-exists, so it is a no-op on an existing install).
 alter table user_profiles alter column role set default 'viewer';
 
--- Auto-creates a profile (default role: analyst) the moment someone signs
--- up via Supabase Auth. Admin is never self-assigned at signup -- it's
--- only ever granted afterward, by hand, in the Supabase dashboard.
+-- Auto-creates a profile (default role: viewer, per F9 above) the moment
+-- someone signs up via Supabase Auth. Admin is never self-assigned at
+-- signup -- it's only ever granted afterward, by hand, in the Supabase
+-- dashboard.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
