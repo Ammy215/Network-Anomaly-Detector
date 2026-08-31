@@ -158,6 +158,28 @@ Now that you have the real Vercel URL:
 **You should see:** the service redeploy (Logs tab shows a fresh build/
 restart), status returns to "Live."
 
+### 3.1 Wire Supabase Auth's redirect URL too
+
+Easy to miss: Supabase Auth still has its own separate idea of where to send
+users after a signup-confirmation or magic-link email, independent of CORS.
+Left pointed at `localhost`, every confirmation email will try to redirect a
+real visitor's browser to a `localhost` address that doesn't exist for them
+— they'll land on a browser error page with `otp_expired` in the URL, which
+looks like an expired-link bug but is actually a wrong-redirect-host bug.
+
+1. Supabase dashboard → your project → **Authentication** → **URL
+   Configuration**.
+2. **Site URL:** set to your real Vercel URL, e.g.
+   `https://network-anomaly-detector-inky.vercel.app`.
+3. **Redirect URLs:** add that same URL to the allow-list. You can keep
+   `http://localhost:5173` in the list too — Supabase allows more than one,
+   so local dev keeps working alongside the deployed site.
+4. Save.
+
+**You should see:** a fresh signup's confirmation email link lands back on
+the live Vercel URL, not `localhost`. Any confirmation link sent *before*
+this fix is dead — sign up again after saving.
+
 ---
 
 ## 4. End-to-end verification

@@ -6,7 +6,7 @@ It is a **detection and investigation** tool, not an attack tool, and it never c
 
 ## Live demo
 
-**[TODO: paste the deployed Vercel URL here once live]**
+**https://network-anomaly-detector-inky.vercel.app**
 
 The dashboard, PCAP upload/analysis, ML scoring, AI investigation, threat-intel
 enrichment, auth, and RBAC are all live and free. **Live packet capture is
