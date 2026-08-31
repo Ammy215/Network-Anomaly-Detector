@@ -18,7 +18,12 @@ build/
 
 # Trained model artifacts — binaries, reproducible from seed + data.
 # The model_versions table is the source of truth for what was trained.
-backend/models/
+# Deliberate exception (Phase 14): the one currently-shipped artifact is
+# committed, since Render's free tier has no persistent disk and this file
+# can't be regenerated at boot without breaking the pinned "shipped model
+# id/threshold must never change" invariant from the pre-deployment pass.
+backend/models/*
+!backend/models/isolation_forest_behavioural_only_381419f9.joblib
 
 # RAG corpus data — the local Chroma vector store and the cached MITRE
 # ATT&CK STIX bundle. Both binary/large and fully regenerable from
