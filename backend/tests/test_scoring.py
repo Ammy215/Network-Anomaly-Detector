@@ -16,6 +16,7 @@ from app.services.ml.feature_matrix import (  # noqa: E402
 from app.services.ml.scoring import (  # noqa: E402
     explain,
     is_anomalous,
+    load_bundle,
     raw_scores,
     to_anomaly_score,
 )
@@ -121,6 +122,23 @@ def test_full_explanation_covers_every_feature_and_matches_raw_values():
     assert by_name["close_fin_fin"]["flow_value"] == 0.0
     assert by_name["handshake_false"]["flow_value"] == 1.0
     assert by_name["handshake_true"]["flow_value"] == 0.0
+
+
+def test_load_bundle_normalizes_windows_backslash_path():
+    """train_models.py writes artifact_path via str(Path), which is
+    backslash-separated when that run happened on Windows -- but a
+    production container is always Linux, where backslash is not a path
+    separator, so Path() there treats the whole string as one filename
+    and silently never finds the real file. A model_versions row written
+    from a Windows training run must still resolve when the deployed
+    backend reads it on Linux. Uses the real shipped artifact (committed
+    for deployment, see .gitignore) rather than a fixture, so this
+    exercises the exact string that broke in production.
+    """
+    windows_style_path = "models\\isolation_forest_behavioural_only_381419f9.joblib"
+    bundle = load_bundle(windows_style_path)
+    assert bundle is not None
+    assert bundle.algorithm == "isolation_forest"
 
 
 def test_full_explanation_includes_negative_contributions():

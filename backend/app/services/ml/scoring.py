@@ -44,12 +44,21 @@ def load_bundle(artifact_path: str) -> ModelBundle | None:
     Artifacts are git-ignored binaries, so a fresh clone won't have them
     until train_models.py runs. Callers degrade gracefully rather than
     crashing -- an unscored flow is acceptable, a 500 on upload is not.
+
+    `artifact_path` is read from the model_versions row exactly as
+    train_models.py wrote it -- if that run happened on Windows, it's a
+    backslash-separated string. Backslash is not a path separator on
+    POSIX, so Path() on Linux treats the whole thing as one filename and
+    silently never finds the real file (a production Docker container is
+    always Linux, no matter what OS trained the model) -- normalizing
+    before constructing the Path makes this work on both.
     """
     import joblib
 
-    path = Path(artifact_path)
+    normalized = artifact_path.replace("\\", "/")
+    path = Path(normalized)
     if not path.is_absolute():
-        path = Path(__file__).resolve().parents[3] / artifact_path
+        path = Path(__file__).resolve().parents[3] / normalized
     if not path.exists():
         logger.warning("Model artifact not found at %s -- flows will be unscored", path)
         return None

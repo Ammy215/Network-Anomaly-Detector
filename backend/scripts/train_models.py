@@ -351,7 +351,11 @@ def persist(bundle: ModelBundle, metrics: dict, training_flows: list[dict], labe
             "chosen a priori, never tuned against scan labels"
         ),
         "metrics": json_safe(metrics),
-        "artifact_path": str(artifact_path.relative_to(ARTIFACT_DIR.parent)),
+        # .as_posix(), not str() -- str(Path) uses the OS-native separator,
+        # so a Windows run would write a backslash path into a column that
+        # a Linux deployment later reads. Forward slashes work correctly
+        # as a path separator on both platforms.
+        "artifact_path": artifact_path.relative_to(ARTIFACT_DIR.parent).as_posix(),
     })
     return version_id
 
