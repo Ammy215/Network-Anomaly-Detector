@@ -28,4 +28,11 @@ jobs:
         # pytest.ini already sets `addopts = -m "not llm"`, so the 4 tests
         # that call a real LLM are excluded by default -- no live calls,
         # no secrets needed here.
-        run: pytest -v
+        #
+        # `python -m pytest`, not bare `pytest`: -m inserts the cwd (backend/)
+        # onto sys.path, which is what makes `from app...` importable in
+        # every test module. The bare console-script entry point does not
+        # do this and fails 4 modules with ModuleNotFoundError: No module
+        # named 'app' -- reproduced locally both in a plain python:3.12-slim
+        # container and in the project's own venv before this fix.
+        run: python -m pytest -v
