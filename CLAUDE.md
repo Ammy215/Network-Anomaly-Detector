@@ -8,7 +8,16 @@ Read these before doing anything in this repo — they are binding for the whole
 
 ## Hard rules (never break these)
 
-1. **No Docker, ever.** Manual configuration only, Windows + VS Code terminal.
+1. **No Docker, ever, for local development.** Manual configuration only, Windows + VS Code terminal.
+   **Documented exception (Phase 14, deployment only):** the backend ships a
+   `Dockerfile` solely because Render's free-tier native Python runtime has
+   no mechanism to install system-level packages, and PCAP parsing
+   (`pyshark`) hard-depends on the real `tshark` binary — verified directly
+   against Render's own docs (`https://render.com/docs/native-runtimes`:
+   *"To use a tool that isn't included in Render's native runtimes...you can
+   deploy with Docker instead"*), not assumed. Docker is used *only* for the
+   Render build/deploy path; local development still never uses it, and the
+   rule stays "no Docker" everywhere else.
 2. **Free-tier only, verified not assumed.** Check current pricing/limits before committing to any API or host.
 3. **Real data in the product; fixtures only inside unit tests.** The app never shows fake/mock/placeholder results to a user. `.env` is git-ignored from commit #1 — never commit secrets.
 

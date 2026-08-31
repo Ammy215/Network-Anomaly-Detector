@@ -146,7 +146,14 @@ def test_expired_token_still_401():
 
     fake_client = MagicMock()
     fake_client.get_signing_key_from_jwt.return_value = SimpleNamespace(key="k")
+    # _decode_token builds `issuer=f"{_project_url()}/auth/v1"` as a plain
+    # function argument, which Python evaluates eagerly even though
+    # jwt.decode itself is mocked below -- so without a real SUPABASE_URL
+    # (e.g. in CI, with no .env) this test would crash on _project_url()'s
+    # own 500 before jwt.decode ever ran. Mocked here so the test verifies
+    # the actual thing it's about (401 vs 503), independent of env config.
     with patch.object(auth, "_jwks_client", return_value=fake_client), \
+         patch.object(auth, "_project_url", return_value="https://project.supabase.co"), \
          patch.object(jwtlib, "decode", side_effect=jwtlib.ExpiredSignatureError("expired")):
         with pytest.raises(HTTPException) as excinfo:
             auth._decode_token("any.token.here")

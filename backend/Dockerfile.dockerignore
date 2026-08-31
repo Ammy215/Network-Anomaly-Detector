@@ -1,0 +1,19 @@
+# Build context is the repo root; this file, named after the Dockerfile,
+# is picked up automatically by BuildKit without needing a root-level
+# .dockerignore that would also affect other tools.
+.git/
+frontend/
+node_modules/
+
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/.env
+backend/.env.local
+backend/data/
+backend/models/*
+!backend/models/isolation_forest_behavioural_only_381419f9.joblib
+backend/tests/
+backend/.pytest_cache/
+backend/*.log

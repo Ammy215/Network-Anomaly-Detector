@@ -64,7 +64,13 @@ Then just tell me what you need. That's it.
 
 1. **Phases not all at once** — one phase at a time, test before next
 2. **No mock data anywhere** — everything uses real live APIs and real data
-3. **No Docker ever** — manual configuration for deep learning
+3. **No Docker ever, for local development** — manual configuration. NetSentinel's
+   Phase 14 (deployment) is a documented exception to this: the backend's
+   `Dockerfile` exists only because Render's free-tier native Python runtime
+   has no way to install `tshark` (a hard dependency of PCAP parsing),
+   verified against Render's own docs, not assumed. Docker there is scoped
+   strictly to that one deploy path — never local dev, never any other
+   project unless the same kind of unavoidable constraint is verified first.
 4. **Fix before moving** — if something is broken, fix it before next phase
 5. **Understand everything** — explain why, not just generate code
 6. **Real live data** — no fake JSON, no dummy datasets, no hardcoded samples
