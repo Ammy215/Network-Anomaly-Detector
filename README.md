@@ -4,17 +4,34 @@ NetSentinel watches network traffic, learns what "normal" looks like for that ne
 
 It is a **detection and investigation** tool, not an attack tool, and it never claims certainty it doesn't have. Full requirements and design decisions live in [`docs/PROJECT.md`](docs/PROJECT.md); the phased build plan and test gates live in [`docs/PHASE-2-PLAN.md`](docs/PHASE-2-PLAN.md).
 
-## Status: Phase 0 — Foundation
+## Live demo
 
-This is the empty-but-wired skeleton. **Nothing functional exists yet** — no packet capture, no flow assembly, no ML, no AI, no auth, no styling. The only thing this phase proves is that the backend and frontend are correctly wired to each other and the repo is set up correctly.
+**[TODO: paste the deployed Vercel URL here once live]**
+
+The dashboard, PCAP upload/analysis, ML scoring, AI investigation, threat-intel
+enrichment, auth, and RBAC are all live and free. **Live packet capture is
+local-only** — free hosting doesn't grant a container raw-socket access, so
+that one feature is demoed by running the app locally (see below), not on
+the hosted instance. See [`docs/PROJECT.md`](docs/PROJECT.md) §8 for the full
+reasoning. Full deploy-from-scratch steps: [`docs/DEPLOYMENT-WALKTHROUGH.md`](docs/DEPLOYMENT-WALKTHROUGH.md).
+
+## Status: Phase 14 — Deployed
+
+All phases (0-13) plus an extended pre-deployment hardening pass are complete:
+packet capture and flow assembly, ML anomaly scoring, RAG-grounded AI
+investigation, threat-intel enrichment, auth/RBAC, and adversarial security
+testing. This phase adds the free public deployment described above.
 
 ## Stack
 
-- **Frontend:** React 18 + Vite + Tailwind CSS
+- **Frontend:** React 19 + Vite + Tailwind CSS
 - **Backend:** Python + FastAPI
 - **Database / Auth:** Supabase (Postgres)
-- **Hosting:** free-tier only, everywhere
-- No Docker — everything runs manually so every moving part is understood.
+- **Hosting:** free-tier only, everywhere — frontend on Vercel, backend on Render
+- **Local dev:** no Docker — everything runs manually so every moving part is
+  understood. The backend's `Dockerfile` exists solely for deployment (Render
+  needs it to install `tshark`, a hard dependency of PCAP parsing); it is not
+  part of the local development workflow.
 
 ## Running it locally
 
@@ -58,6 +75,7 @@ Visit `http://localhost:5173` — should show the health-check result fetched fr
 
 - [`docs/PROJECT.md`](docs/PROJECT.md) — requirements & decisions
 - [`docs/PHASE-2-PLAN.md`](docs/PHASE-2-PLAN.md) — phased build plan & test gates
+- [`docs/DEPLOYMENT-WALKTHROUGH.md`](docs/DEPLOYMENT-WALKTHROUGH.md) — deploy from scratch, step by step
 - [`docs/CLAUDE_CONTEXT.md`](docs/CLAUDE_CONTEXT.md) — author's stack/style rules
 - [`CLAUDE.md`](CLAUDE.md) — project rules for Claude Code sessions
 
