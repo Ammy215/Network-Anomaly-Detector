@@ -54,6 +54,22 @@ def investigate_flow(
     (`fetch=False`), only analyst/admin can actually trigger the LLM
     pipeline (`fetch=True`), checked inline since it's one endpoint.
     """
+    # Cache check first, before anything else -- including the role check
+    # and rate limit. The cache key is flow_id alone, so a hit needs no
+    # other information, and a hit is safe to trust without re-verifying
+    # is_anomalous or existence: investigations.flow_id has ON DELETE
+    # CASCADE from flows, so a cached row can only exist for a flow that
+    # was flagged (this endpoint's own gate, below) at the time it was
+    # cached and still exists now. Previously this full flow re-fetch ran
+    # unconditionally before the cache was ever consulted, which meant
+    # every cache-hit request still paid ~3 round-trips it didn't need
+    # (measured: ~800ms instead of ~200ms) -- and fetch=true on an
+    # already-cached flow was silently charged against the rate limit for
+    # an LLM call that was never going to happen.
+    cached = supabase_client.get_cached_investigation(flow_id)
+    if cached:
+        return {"cached": True, **_shape(cached)}
+
     if body.fetch and current_user.role not in ("analyst", "admin"):
         raise HTTPException(status_code=403, detail="Running a new investigation requires analyst or admin.")
     if body.fetch:
@@ -67,10 +83,6 @@ def investigate_flow(
             status_code=400,
             detail="Investigation is only available for flagged flows.",
         )
-
-    cached = supabase_client.get_cached_investigation(flow_id)
-    if cached:
-        return {"cached": True, **_shape(cached)}
     if not body.fetch:
         return {"cached": False}
 

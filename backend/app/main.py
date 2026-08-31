@@ -1,7 +1,8 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.routers import admin, auth, capture, enrichment, integrations, investigate, models, pcap, rag, verdicts
@@ -32,6 +33,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def reject_oversized_requests(request: Request, call_next):
+    """A cheap safety net, not an ingress-size solution (Phase 13, F10
+    follow-up). PCAP uploads already have a dedicated 50MB cap
+    (max_upload_size_bytes) enforced inside the handler -- but that check
+    only runs after Starlette has spooled the whole request body to disk,
+    so it bounds what gets PARSED, not what gets ACCEPTED. This rejects by
+    Content-Length before any body is read at all, for every route, so an
+    absurdly large request (a multi-GB POST to any endpoint, not just
+    upload) is turned away immediately instead of being spooled first.
+
+    Deliberately not a complete fix: a client using chunked
+    transfer-encoding sends no Content-Length, so this check simply
+    doesn't apply to it -- true streaming/chunked enforcement needs a
+    background-job upload architecture, which is out of scope for this
+    phase (see docs/PERFORMANCE-NOTES.md).
+    """
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > settings.max_request_body_bytes:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "Request body too large."},
+                )
+        except ValueError:
+            pass
+    return await call_next(request)
 
 app.include_router(pcap.router)
 app.include_router(models.router)

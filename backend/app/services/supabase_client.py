@@ -116,8 +116,20 @@ def list_source_files(batch_size: int = 1000) -> list[str]:
     return sorted(seen)
 
 
-def _scores_for_model(model_version_id: str, batch_size: int = 1000) -> dict[str, dict]:
-    """Every score row for one model, paginated and keyed by flow_id."""
+def _scores_for_all(model_version_id: str, batch_size: int = 1000) -> dict[str, dict]:
+    """Every score row for one model, unconditionally, paginated by
+    `.range()` -- no ids named in the request at all.
+
+    This is the right tool specifically when the caller already knows it
+    wants ~the whole table (a bare score-sort with no source_file filter
+    returns every flow, just reordered): `.range()` pagination has no
+    per-row id-enumeration cost, so it can safely batch at 1000 instead of
+    the ~400 a `.in_()` call is limited to. Measured: using the
+    id-scoped `_scores_for_flow_ids()` here instead (needing ~9 chunked
+    calls to name all ~3,200 ids) was SLOWER than this, not faster --
+    scoping by id only pays off when the result set is meaningfully
+    smaller than the table. See `_scores_for_flow_ids()` for that case.
+    """
     client = get_client()
     by_flow: dict[str, dict] = {}
     start = 0
@@ -133,6 +145,37 @@ def _scores_for_model(model_version_id: str, batch_size: int = 1000) -> dict[str
         if len(page) < batch_size:
             break
         start += batch_size
+    return by_flow
+
+
+def _scores_for_flow_ids(model_version_id: str, flow_ids: list[str], batch_size: int = 400) -> dict[str, dict]:
+    """Every score row for one model, for exactly the given flow ids --
+    scoped to an actual result set rather than the whole table.
+
+    Chunked `.in_()` calls, not one `.in_()` with every id: PostgREST
+    enforces a body/URL-size limit (confirmed: a single request above
+    ~600 ids fails with "JSON could not be generated"), and 400 leaves
+    real margin below that. This replaces an earlier version that
+    sidestepped the same cliff by paginating over *every* score row in
+    the table regardless of how few flows actually matched a filter or
+    sort -- fine for the full-table case, needlessly expensive for a
+    small filtered one (measured: fetching all ~3,100 rows to answer a
+    68-row query cost ~2.8-3.1s; scoping it down removes that entirely).
+    """
+    if not flow_ids:
+        return {}
+    client = get_client()
+    by_flow: dict[str, dict] = {}
+    for start in range(0, len(flow_ids), batch_size):
+        batch = flow_ids[start:start + batch_size]
+        page = (
+            client.table(FLOW_SCORES_TABLE)
+            .select("flow_id, anomaly_score, is_anomalous, top_features")
+            .eq("model_version_id", model_version_id)
+            .in_("flow_id", batch)
+            .execute()
+        ).data
+        by_flow.update({row["flow_id"]: row for row in page})
     return by_flow
 
 
@@ -185,12 +228,18 @@ def list_flows(limit: int = 500, source_file: str | None = None, sort: str = "st
     version = get_active_model_version()
     if version:
         if needs_wide_search:
-            # A filter/score-sort can pull 1000+ flow ids -- as an `.in_()`
-            # filter that blows past PostgREST's request-size limit
-            # (confirmed: fails above ~600 ids with "JSON could not be
-            # generated"). Paginating every score row for the model
-            # instead sidesteps the URL/body-size cliff entirely.
-            by_flow = _scores_for_model(version["id"])
+            if source_file:
+                # A source_file filter narrows to a genuinely small slice
+                # -- scope the score lookup to just those flow ids rather
+                # than fetching every score in the table.
+                by_flow = _scores_for_flow_ids(version["id"], [r["id"] for r in rows])
+            else:
+                # A bare score-sort with no filter returns essentially
+                # every flow, just reordered -- there is no smaller set to
+                # scope to, so plain unconditional pagination (no ids to
+                # enumerate) is the cheaper path. See _scores_for_all()'s
+                # docstring for the measurement behind this split.
+                by_flow = _scores_for_all(version["id"])
         else:
             scores = (
                 get_client()

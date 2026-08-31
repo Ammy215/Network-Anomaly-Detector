@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     # Phase 1 — PCAP upload & flow assembly
     flow_inactivity_timeout_seconds: int = 120
     max_upload_size_bytes: int = 50 * 1024 * 1024
+    # Phase 13 -- a global safety net, separate from max_upload_size_bytes
+    # above. That cap is enforced INSIDE the upload handler after Starlette
+    # has already spooled the whole request body to disk; this one rejects
+    # by Content-Length before any body is read at all, for every route,
+    # not just upload. Deliberately larger than max_upload_size_bytes (not
+    # equal to it) -- it exists to reject something absurd (a multi-GB
+    # POST), not to duplicate the PCAP-specific size error. It only ever
+    # catches a client that sends Content-Length; chunked transfer-encoding
+    # has no declared length to check, so this is a cheap floor, not a
+    # complete ingress limit -- see docs/PERFORMANCE-NOTES.md.
+    max_request_body_bytes: int = 100 * 1024 * 1024
     # Explicit override if tshark isn't discoverable on PATH (common right
     # after a fresh Wireshark install, until the shell/session restarts).
     tshark_path: Optional[str] = None
