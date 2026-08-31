@@ -118,7 +118,22 @@ def explain_node(state: State) -> dict:
     return {"investigation": result.model_dump()}
 
 
+_DASH_VARIANTS_RE = re.compile("[‐‑‒–—―]")
+
+
 def _normalize(text: str) -> str:
+    """Lowercase + collapse whitespace, plus two normalizations found by
+    real false-positive citations in production, not added speculatively:
+    - Strip markdown emphasis markers (**bold**, __bold__). The retrieved
+      chunk is raw markdown; a model quoting its prose naturally drops the
+      formatting syntax, which is not a misquote.
+    - Fold every dash-like Unicode punctuation variant (non-breaking
+      hyphen, en/em dash, etc.) to a plain ASCII '-'. A model quoting
+      "three-feature" as "three‑feature" (non-breaking hyphen) is
+      stylistic substitution, not a different word.
+    """
+    text = text.replace("**", "").replace("__", "")
+    text = _DASH_VARIANTS_RE.sub("-", text)
     return " ".join(text.lower().split())
 
 

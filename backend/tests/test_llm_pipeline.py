@@ -107,6 +107,35 @@ def test_deterministic_check_catches_a_citation_to_a_chunk_never_retrieved():
     assert "mitre:T1595:0" in result["invalid_citations"]
 
 
+def test_deterministic_check_ignores_markdown_bold_the_chunk_has_but_the_quote_drops():
+    """Real production false positive: the chunk wraps a term in markdown
+    bold (**`rst`**), but a model naturally quotes prose without
+    preserving markdown syntax -- that is not a misquote.
+    """
+    chunk = {**REAL_CHUNK, "text": "- **`rst`** -- the connection ended with a RST (reset) packet."}
+    investigation = {
+        "citations": [{"source": REAL_CHUNK["id"], "excerpt": "`rst` -- the connection ended with a RST (reset) packet."}],
+        "mitre_techniques": [],
+    }
+    result = deterministic_self_check(investigation, [chunk])
+    assert result["citations_valid"] is True
+
+
+def test_deterministic_check_ignores_dash_variant_substitution():
+    """Real production false positive: the chunk uses a plain ASCII
+    hyphen ("three-feature"), but the model's excerpt used a
+    non-breaking hyphen U+2011 ("three‑feature") -- a stylistic
+    substitution an LLM commonly makes, not a different word.
+    """
+    chunk = {**REAL_CHUNK, "text": "flows share this exact same three-feature signature."}
+    investigation = {
+        "citations": [{"source": REAL_CHUNK["id"], "excerpt": "this exact same three‑feature signature"}],
+        "mitre_techniques": [],
+    }
+    result = deterministic_self_check(investigation, [chunk])
+    assert result["citations_valid"] is True
+
+
 def test_deterministic_check_flags_mitre_technique_with_no_supporting_chunk():
     investigation = {"citations": [], "mitre_techniques": ["T1595"]}
     result = deterministic_self_check(investigation, [REAL_CHUNK])
