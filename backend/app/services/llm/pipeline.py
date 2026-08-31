@@ -16,6 +16,7 @@ restructuring anything.
 
 import difflib
 import logging
+import re
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -121,15 +122,15 @@ def _normalize(text: str) -> str:
     return " ".join(text.lower().split())
 
 
-def _citation_supported(excerpt: str, chunk_text: str) -> bool:
-    """Exact-or-close-paraphrase check: does `excerpt` actually appear in
-    `chunk_text`? A literal substring match always passes; anything else
-    falls back to how much of the excerpt is covered by the single
-    longest matching run of text, which tolerates minor paraphrasing but
-    still fails a wholly fabricated excerpt (near-zero overlap).
+_ELLIPSIS_RE = re.compile(r"\s*(?:\.{3}|…)\s*")
+
+
+def _segment_supported(norm_excerpt: str, norm_chunk: str) -> bool:
+    """A literal substring match always passes; anything else falls back
+    to how much of the excerpt is covered by the single longest matching
+    run of text, which tolerates minor paraphrasing but still fails a
+    wholly fabricated excerpt (near-zero overlap).
     """
-    norm_excerpt = _normalize(excerpt)
-    norm_chunk = _normalize(chunk_text)
     if not norm_excerpt:
         return False
     if norm_excerpt in norm_chunk:
@@ -137,6 +138,20 @@ def _citation_supported(excerpt: str, chunk_text: str) -> bool:
     matcher = difflib.SequenceMatcher(None, norm_excerpt, norm_chunk)
     match = matcher.find_longest_match(0, len(norm_excerpt), 0, len(norm_chunk))
     return (match.size / len(norm_excerpt)) >= 0.6
+
+
+def _citation_supported(excerpt: str, chunk_text: str) -> bool:
+    """Exact-or-close-paraphrase check: does `excerpt` actually appear in
+    `chunk_text`? Models routinely elide a middle sentence of a long quote
+    with a mid-excerpt "..." -- each side of that ellipsis is then a real,
+    separately verbatim run, not one contiguous quote, so it's checked
+    segment by segment rather than as a single span.
+    """
+    norm_chunk = _normalize(chunk_text)
+    segments = [s for s in _ELLIPSIS_RE.split(excerpt) if _normalize(s)]
+    if not segments:
+        return False
+    return all(_segment_supported(_normalize(s), norm_chunk) for s in segments)
 
 
 def deterministic_self_check(investigation: dict, chunks: list[dict]) -> dict:
