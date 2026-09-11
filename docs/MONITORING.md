@@ -145,8 +145,18 @@ The backend runs in Render's **Ohio (US East)** region; the database is in
 Supabase's **Tokyo** region. Every Supabase query from the backend crosses
 the Pacific.
 
-- **Estimate, not yet measured:** roughly 150–200ms per database round trip.
-  Co-located, the same round trip would be single-digit milliseconds.
+- **Measured: ≈170–215ms per Supabase call** (server-side `TIMING` lines;
+  co-located, the same call would be single-digit milliseconds):
+
+  | Sample | Server time | What it isolates |
+  |---|---|---|
+  | `/api/health/ready`, cache miss (steady state) | 214.2ms | one Supabase query |
+  | `/api/health/ready`, cache hit | 0.8ms | the endpoint with no query — so the query ≈ 213ms |
+  | `/api/health/ready`, first miss | 448.4ms | one query + opening a fresh connection |
+  | `/api/capture/status` (n=16) | median ≈170ms, 153–213ms, occasional 440–540ms | auth's one profile lookup |
+  | `/api/auth/me` | 179.0ms | same |
+
+  Single samples of `/ready`; `/capture/status` is the steadier corroboration.
 - **Endpoints pay this per query, not per request.** Anything that makes
   several sequential Supabase calls (paginated flow listing, score lookups,
   auth's profile lookup) pays it several times over.
@@ -156,6 +166,22 @@ the Pacific.
   long-distance database hop; deployment makes that hop longer rather than
   adding one. The honest comparison is "India→Tokyo vs Ohio→Tokyo", not
   "zero vs 150ms".
+- **Measured per-endpoint cost, as deployed** (one browsing session):
+  `/api/models` 310–402ms · `/api/integrations/status` 196ms ·
+  `/api/verdicts/summary` 1191ms · `/api/flows/source-files` 1245–1492ms ·
+  `/api/auth/login-event` 659ms.
+- **The bigger cost is the flows fan-out, not geography alone.** The app
+  shell loads flows with one `/api/flows?source_file=…` request *per capture
+  file*, all in parallel (`fetchAllFlows` in `frontend/src/App.jsx`). With
+  20 capture files that is 20 concurrent requests. Their start times
+  (completion minus duration) all fall within ~1s, but they **finish one
+  after another**: 2.1s, 2.7s, 2.8s … 7.4s, 10.1s. So the page's flow data
+  is complete only after **~10s of server time** — even though no single
+  request is slow on its own. Why they serialize is not yet established;
+  candidates are the free instance's CPU share, the shared Supabase client's
+  connection handling, or Supabase itself. Not comparable one-to-one with
+  `PERFORMANCE-NOTES.md`'s 2.8–3.1s `/api/flows` (that was one request, at a
+  smaller data size, not 20 concurrent ones).
 - **Not fixed, deliberately.** Moving either service is a real migration
   (a new Supabase project and data move, or a new Render service), out of
   scope for this phase. If it were done, the choice would be to move the
