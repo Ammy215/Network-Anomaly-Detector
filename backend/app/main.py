@@ -116,5 +116,14 @@ app.include_router(integrations.router)
 
 
 @app.get("/api/health")
-def health():
+def health(request: Request):
+    # TEMPORARY -- one-shot capture of the real proxy chain in production,
+    # to choose FORWARDED_ALLOW_IPS from evidence. Removed in the next commit.
+    h = request.headers
+    logging.getLogger("netsentinel.hdrcapture").info(
+        "HDRCAPTURE peer=%s xff=%r cf_connecting_ip=%r true_client_ip=%r x_real_ip=%r forwarded=%r",
+        request.client.host if request.client else None,
+        h.get("x-forwarded-for"), h.get("cf-connecting-ip"), h.get("true-client-ip"),
+        h.get("x-real-ip"), h.get("forwarded"),
+    )
     return {"status": "ok"}
