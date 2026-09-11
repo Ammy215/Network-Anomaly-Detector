@@ -184,7 +184,10 @@ def _check_ready() -> bool:
     return True
 
 
-@app.get("/api/health/ready")
+# HEAD as well as GET: UptimeRobot's free tier can only send HEAD (choosing
+# the method is a paid feature), and a GET-only route answers HEAD with 405
+# -- which the monitor would report as "down" on every single check.
+@app.api_route("/api/health/ready", methods=["GET", "HEAD"])
 def ready():
     """Readiness: can this instance do its actual job -- reach the database
     and score with the shipped model? That catches what /api/health cannot:

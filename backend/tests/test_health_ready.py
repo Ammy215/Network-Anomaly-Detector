@@ -86,6 +86,20 @@ def test_cache_expires(artifact):
     assert mocked.call_count == 2
 
 
+def test_head_request_gets_the_same_verdict_as_get(artifact):
+    # UptimeRobot free can only send HEAD; a 405 here reads as "down".
+    with patch.object(supabase_client, "get_active_model_version",
+                      return_value={"id": "v1", "artifact_path": artifact}):
+        r = client.head("/api/health/ready")
+    assert r.status_code == 200
+    assert r.content == b""
+
+
+def test_head_request_still_reports_degraded():
+    with patch.object(supabase_client, "get_active_model_version", side_effect=ConnectionError("x")):
+        assert client.head("/api/health/ready").status_code == 503
+
+
 def test_liveness_endpoint_still_never_touches_the_database():
     # Render's internal checker hits /api/health every ~5s.
     with patch.object(supabase_client, "get_active_model_version") as mocked:

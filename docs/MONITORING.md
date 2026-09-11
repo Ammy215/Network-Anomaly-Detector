@@ -20,6 +20,14 @@ Render's checker deliberately stays on `/api/health` — if it pointed at
 `/ready`, a Supabase outage would make Render restart a perfectly healthy
 process.
 
+**UptimeRobot configuration (free plan):** HTTP monitor on `/api/health/ready`,
+60-minute interval, **request timeout 60s** (the maximum; the default 30s is
+shorter than a ~43s cold start and would alert on every sleepy-hour check),
+email alerts. The free plan **only sends `HEAD`** — choosing the method is a
+paid feature — so `/ready` accepts `HEAD` as well as `GET`. Before that
+change it answered `HEAD` with `405`, which would have read as "down" on
+every check.
+
 **What `/ready` does not say.** It never reports *which* check failed —
 that goes to the server log (`netsentinel.health`). It is unauthenticated,
 and shouldn't describe the backend's internals to whoever asks. Its result
