@@ -372,3 +372,67 @@ project's standing rule.
   is the floor under almost every number in this document. It wasn't
   investigated as an optimization target this phase — that's a hosting/
   project-tier question, not an application-code one.
+
+---
+
+## Known production issue: the app shell's per-file `/api/flows` fan-out (post-deploy)
+
+> Measured in production after Phase 14's deploy (Render, Ohio → Supabase,
+> Tokyo), from the backend's own `TIMING` log lines. **Documented, not
+> fixed** — a candidate for a future performance pass.
+
+**What happens.** On every app load (and again after each PCAP upload),
+`App.jsx`'s shared data load calls `/api/flows/source-files`, then
+`fetchAllFlows()` fires **one `GET /api/flows?source_file=…` per capture
+file, all in parallel** (`Promise.all`). With 20 capture files in the
+database that is **20 concurrent requests** — each separately authenticated
+(20 `user_profiles` lookups, 20 charges to the per-user `global`
+rate-limit bucket), each running its own paginated Supabase query.
+(For precision: this is the app shell's load that feeds Overview,
+Investigations and the model dashboard. `FlowsPage.jsx` makes its own
+single unfiltered `/api/flows` call on top.)
+
+**Measured in production.** Start time = completion − duration; all 20
+requests start within ~1s of each other, then **complete one after
+another**:
+
+| completion (IST, 11 Sep) | server time |
+|---|---|
+| 12:53:34 | 2,121 → 3,007ms (first five) |
+| 12:53:35 | 3,113 → 3,819ms |
+| 12:53:37 | 4,999 → 5,996ms |
+| 12:53:38–39 | 6,005 → 7,427ms |
+| 12:53:42 | **10,125ms** (last) |
+
+So the flow data behind the app is complete only after **~10s of server
+time**, although no individual request is slow — the cost is the queue.
+Page-level numbers from the same session: `/api/flows/source-files`
+1,245–1,492ms, `/api/verdicts/summary` 1,191ms.
+
+**How this relates to Phase 13.** The fan-out is the same root cause §3
+identified (15 files, ~16.4s cold load, locally). Fix 1 made each per-file
+call cheaper (→ ~5.9s locally) but left the fan-out structure in place.
+Since then the file count grew 15 → 20, and each Supabase call now costs
+≈170–215ms from Ohio (`docs/MONITORING.md`), so the structure's cost is
+back up to ~10s in production. The two figures are not a like-for-like
+comparison (different machine, network path, and data size) — the point is
+that the structure scales with the number of capture files.
+
+**Checked, and not a correctness bug.** The per-file path paginates past
+Supabase's 1000-row cap (`list_flows`, `needs_wide_search`), so the two
+largest captures (1,039 and 1,002 flows) come back complete. The cost is
+performance only.
+
+**Not yet established: why the requests serialize.** Candidates — the free
+instance's CPU share, the shared Supabase client's connection handling, or
+Supabase itself. None tested.
+
+**Candidate fix direction (future pass — not built).** Replace the
+per-file fan-out with **one batched call**: a single request that returns
+every flow via server-side pagination in the style of the existing
+`list_all_flows()` (1000-row `.range()` pages — ~4 sequential Supabase
+pages for 3,531 flows, instead of 20 concurrent requests). One auth check,
+one rate-limit charge, and a cost that grows with total rows rather than
+with the number of capture files. Before building it: measure whether
+fewer concurrent requests finish faster, which would identify the
+serialization cause; and check the single response's size at 3,500+ flows.

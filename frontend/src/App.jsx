@@ -72,7 +72,9 @@ function AuthedApp() {
   useEffect(() => {
     // In dev, React StrictMode mounts every effect twice (mount ->
     // cleanup -> mount) to surface non-idempotent effects. This effect
-    // fires 8 real network requests (7 of them concurrent), so without
+    // fires 3 requests plus one /api/flows per capture file (23 with 20
+    // files -- a known production cost, see docs/PERFORMANCE-NOTES.md's
+    // "per-file /api/flows fan-out"), so without
     // this abort-on-cleanup, StrictMode's canary run and the real run
     // would both fire, doubling backend load and visibly slowing the
     // Overview/Investigations pages' first load. Aborting the canary

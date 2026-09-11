@@ -181,7 +181,8 @@ the Pacific.
   candidates are the free instance's CPU share, the shared Supabase client's
   connection handling, or Supabase itself. Not comparable one-to-one with
   `PERFORMANCE-NOTES.md`'s 2.8–3.1s `/api/flows` (that was one request, at a
-  smaller data size, not 20 concurrent ones).
+  smaller data size, not 20 concurrent ones). Recorded there as a known
+  production issue, with the candidate fix direction.
 - **Not fixed, deliberately.** Moving either service is a real migration
   (a new Supabase project and data move, or a new Render service), out of
   scope for this phase. If it were done, the choice would be to move the
@@ -207,3 +208,103 @@ INFO:netsentinel.timing:TIMING GET /api/flows 200 1234.5ms
   top for what a user actually waits.
 
 To see per-endpoint cost: Render dashboard → Logs → search `TIMING`.
+
+## Real usage: who is using it, and for what
+
+No analytics dependency — `audit_log` already records every sign-in and
+every state-changing action with a user and a timestamp. Run in the
+Supabase SQL editor (the `service_role`-backed editor, not the app):
+
+```sql
+-- Per UTC day, last 30 days.
+select created_at::date as day_utc,
+       count(distinct user_id)                                   as active_users,
+       count(distinct user_id)    filter (where action = 'login') as users_signed_in,
+       count(distinct session_id) filter (where action = 'login') as real_sign_ins,
+       count(*)                   filter (where action <> 'login') as actions
+from audit_log
+where created_at > now() - interval '30 days'
+group by 1 order by 1 desc;
+
+-- What people actually do.
+select action, count(*) as times, count(distinct user_id) as users,
+       max(created_at) as last_seen
+from audit_log
+where action <> 'login' and created_at > now() - interval '30 days'
+group by action order by times desc;
+```
+
+How to read it:
+- **`real_sign_ins` counts only sign-ins after the login fix** (rows with a
+  `session_id`). Before it, login rows were inflated — use
+  `users_signed_in` (distinct users) for that period, never a row count.
+- **Active users** includes anyone who signed in *or* acted that day.
+- Dates are UTC days; IST runs 5h30m ahead.
+- It sees what the backend sees: failed sign-ins and pure page views are
+  not in `audit_log` (see the known gap above).
+
+**Baseline (11 Sep 2026):** tested against the live data. Today shows 1
+active user with 2 real sign-ins (exactly the two verification sign-ins);
+30–31 Aug show 3–4 active users and 25–46 actions a day — `verdict_change`
+(39 all-time) is the most-used feature, then `pcap_upload` (8).
+
+## Data-consistency checklist (manual)
+
+Not automated, deliberately: the database is written by two code paths
+(PCAP upload and live capture) plus two offline scripts, and a scheduled
+checker would be more machinery than this project needs. A documented,
+repeatable check is enough. **Run it after:** every deploy, every model
+activation (`activate_model.py`), and any bulk upload — otherwise monthly.
+
+**1. Database invariants** — one query, every value has an expected answer:
+
+```sql
+with active as (select id from model_versions where is_active)
+select
+  (select count(*) from model_versions where is_active)                        as c1_active_models,             -- expect 1
+  (select count(*) from flows f left join flow_features ff on ff.flow_id = f.id
+    where ff.flow_id is null)                                                    as c2_flows_without_features,    -- expect 0
+  (select count(*) from flows f where not exists (
+     select 1 from flow_scores s, active a
+     where s.flow_id = f.id and s.model_version_id = a.id))                     as c3_flows_unscored_by_active,  -- expect 0
+  (select count(*) from flows)                                                   as c4_total_flows,               -- compare with UI
+  (select count(*) from flow_scores s join active a on s.model_version_id = a.id
+    where s.is_anomalous)                                                        as c5_flagged_by_active,         -- compare with UI
+  (select count(*) from flow_scores s where not exists (
+     select 1 from flows f where f.id = s.flow_id))                              as c6_orphan_scores;             -- expect 0
+```
+
+What a wrong answer means:
+- **c1 = 0** — no active model; the UI falls back to the newest
+  `isolation_forest / behavioural_only` row. c1 > 1 is prevented by a
+  partial unique index.
+- **c2 > 0** — flows were stored but feature extraction didn't finish.
+- **c3 > 0** — scoring on upload is best-effort, so a failure is only a
+  log warning. This is the check that catches it; fix by re-running
+  `activate_model.py` for the active version.
+- **c6 > 0** — shouldn't happen (cascade delete); investigate before
+  trusting any score counts.
+
+**2. Database ↔ UI** — on the live site, signed in:
+- Overview's total flows and flagged count match **c4** and **c5**.
+- The Flows page's "scored by" label names the active model's algorithm
+  and variant (`select algorithm, variant from model_versions where is_active`).
+- `GET /api/health/ready` returns `{"status":"ok"}`.
+
+**3. After activating a different model only** — the investigation cache
+is keyed on `flow_id` alone and stores no model version, so investigations
+written under the previous model keep being served. Count them:
+
+```sql
+select count(*) filter (where s.is_anomalous is not true) as cached_for_flows_active_model_does_not_flag
+from investigations i
+cross join (select id from model_versions where is_active) m
+left join flow_scores s on s.flow_id = i.flow_id and s.model_version_id = m.id;
+```
+
+Non-zero means analysts can open an AI explanation for a flow the shipped
+model no longer flags. Latent today, not live — see the baseline.
+
+**Baseline (11 Sep 2026), tested against the live data:** c1 = 1, c2 = 0,
+c3 = 0, c4 = 3,531, c5 = 2,282, c6 = 0. Investigation cache: 8 entries, all
+written under the current model, all for flows it still flags (0 stale).
