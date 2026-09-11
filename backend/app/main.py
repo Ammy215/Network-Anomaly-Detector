@@ -107,6 +107,41 @@ async def reject_oversized_requests(request: Request, call_next):
             pass
     return await call_next(request)
 
+
+timing_logger = logging.getLogger("netsentinel.timing")
+# Render's internal checker calls this every ~5s -- ~17k lines a day of noise.
+_UNTIMED_ROUTES = {"/api/health"}
+
+
+@app.middleware("http")
+async def log_request_timing(request: Request, call_next):
+    """Server-side time per endpoint, as deployed (docs/MONITORING.md).
+
+    Logs the route TEMPLATE (`/api/flows/{flow_id}`), never the raw URL:
+    no path IDs, and no query string -- which is where the SSE endpoint's
+    bearer token lives. Unmatched paths (scanners probing /wp-admin) log
+    as "unmatched" rather than echoing whatever they asked for.
+
+    Measures time until the response STARTS. For ordinary JSON endpoints
+    that is the whole cost; for streaming responses (live-capture SSE) it
+    is only time-to-first-byte, not how long the stream stays open.
+    """
+    start = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        route = request.scope.get("route")
+        template = getattr(route, "path", None) or "unmatched"
+        if template not in _UNTIMED_ROUTES:
+            timing_logger.info(
+                "TIMING %s %s %d %.1fms",
+                request.method, template, status, (time.perf_counter() - start) * 1000,
+            )
+
+
 app.include_router(pcap.router)
 app.include_router(models.router)
 app.include_router(verdicts.router)
