@@ -77,6 +77,60 @@ keep their `10.x` addresses — the real ones can't be recovered.
 from `10.x` came through Cloudflare. The only other `10.x` caller observed
 is Render's own health checker, which sends no proxy headers.
 
+**Verified in production:** a real sign-in on the live site after the fix
+recorded the client's actual public IP (confirmed against the IP
+Cloudflare's own `/cdn-cgi/trace` reported for the same machine); every
+earlier row shows a `10.x` address.
+
+## Login events: one row per real sign-in
+
+Login counts in `audit_log` were inflated — 230 rows across 4 accounts,
+most within two minutes of the previous one, some under 1ms apart.
+
+**Cause (read from the library source, then reproduced).** The frontend
+posted `/api/auth/login-event` on every `SIGNED_IN` from supabase-js — but
+in auth-js 2.112.4 `SIGNED_IN` is not only a sign-in. `_recoverAndRefresh()`
+emits it whenever a stored session is recovered, which runs on every
+hidden→visible tab switch, and each event is re-broadcast to every other open
+tab over a `BroadcastChannel`. A deliberate two-tab test on the live site
+wrote **9 login rows for zero sign-ins** (pairs 3.6ms and 11ms apart — the
+cross-tab fan-out). The exact per-action multiplier wasn't pinned down; the
+fix doesn't depend on it.
+
+**Fix.** Every Supabase access token carries a `session_id` claim: created by
+a real sign-in (password or email link), unchanged across refreshes and tabs.
+The backend stores it on the login row, and a partial unique index
+(`audit_log_login_session_uniq`) admits at most one login per session — the
+database decides, because duplicates arrive concurrently and a
+check-then-insert in application code would race. A client-side-only fix
+(log only after `signInWithPassword`) was rejected on evidence: all 4
+accounts were confirmed through an email link, so every new user's first
+login would have gone unrecorded. Side benefit: a client can no longer
+inflate the audit log by calling the endpoint in a loop.
+
+**Verified in production:**
+- Tab switching across two tabs on an existing session → exactly 1 row.
+- Sign out, sign in with password → Supabase logs show `POST
+  /auth/v1/token?grant_type=password → 200`, `auth.sessions` gains a new
+  session, and `audit_log` gains exactly one row carrying that session's ID.
+
+**Historical counts are inflated.** Rows before this fix have no
+`session_id` and can't be de-duplicated after the fact. Count logins per
+distinct user per day for that period, not rows.
+
+## Known gap: failed sign-ins are invisible to `audit_log`
+
+Password sign-in goes straight from the browser to Supabase Auth; our
+backend only hears about a login after it succeeded. A failed attempt
+therefore never reaches `audit_log` — one appeared during verification
+(`POST .../token?grant_type=password → 400`) and exists only in Supabase's
+own logs.
+
+Accepted, not tooled: to see failed attempts, query the Supabase project's
+edge logs for `grant_type=password` with a `400` status. Recording them
+ourselves would mean proxying credentials through the backend, which the
+architecture deliberately avoids.
+
 ## Known latency cost: Render (Ohio) ↔ Supabase (Tokyo)
 
 The backend runs in Render's **Ohio (US East)** region; the database is in
