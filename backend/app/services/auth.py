@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
 from functools import lru_cache
 
@@ -169,8 +170,42 @@ def require_role(*roles: str):
     return checker
 
 
+# Render's internal load balancers. Production traffic reaches the container
+# as browser -> Cloudflare -> Render LB (10.x) -> uvicorn, so the socket peer
+# is always a 10.x address and was what every audit row used to record.
+_RENDER_INTERNAL = ipaddress.ip_network("10.0.0.0/8")
+
+
 def client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+    """The real client address for the audit log.
+
+    Chosen from captured production headers, not assumed. X-Forwarded-For
+    arrived as `<anything the client sent>, <client>, <cloudflare edge>,
+    <render lb>`: its leftmost value is client-controlled (a forged entry
+    survived intact), and a right-to-left walk trusting only 10.0.0.0/8
+    stops on the Cloudflare edge -- so uvicorn's FORWARDED_ALLOW_IPS gives
+    either a spoofable or a wrong answer here. CF-Connecting-IP is one
+    value set by Cloudflare, it carried the real address on every request,
+    and Cloudflare rejects a client-supplied copy outright (403, error 1000).
+
+    It is only believed when the peer is Render-internal: anything that
+    connects directly (local dev, a test client) could set the header
+    itself. A malformed value falls back to the peer rather than being
+    written into the audit log.
+    """
+    if not request.client:
+        return None
+    peer = request.client.host
+    try:
+        behind_proxy = ipaddress.ip_address(peer) in _RENDER_INTERNAL
+    except ValueError:
+        return peer
+    if behind_proxy:
+        try:
+            return str(ipaddress.ip_address(request.headers.get("cf-connecting-ip", "").strip()))
+        except ValueError:
+            pass
+    return peer
 
 
 def log_audit(
