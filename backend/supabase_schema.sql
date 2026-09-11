@@ -339,3 +339,23 @@ grant usage, select on sequence audit_log_id_seq to service_role;
 alter table flows drop constraint if exists flows_close_reason_check;
 alter table flows add constraint flows_close_reason_check
   check (close_reason in ('fin_fin', 'rst', 'timeout', 'eof', 'stopped'));
+
+-- NetSentinel — Monitoring: one login row per real sign-in
+-- Run once in the Supabase SQL editor. Idempotent -- safe to re-run.
+--
+-- supabase-js fires SIGNED_IN on every hidden->visible tab switch and
+-- re-broadcasts it to every other open tab, so the frontend's login-event
+-- call ran far more often than users actually signed in (a two-tab test
+-- produced 9 rows for zero sign-ins; see docs/MONITORING.md). Supabase's
+-- access token carries a session_id claim, created on a real sign-in and
+-- unchanged across refreshes and tabs -- so the database, not the client,
+-- decides what counts as one login. The partial unique index is what makes
+-- that hold under concurrent requests (duplicates arrived 3.6ms apart),
+-- which a check-then-insert in application code would not.
+-- text, not uuid: a claim format change must not turn into audit gaps.
+-- Rows before this change have no session_id and are left as they are.
+
+alter table audit_log add column if not exists session_id text;
+create unique index if not exists audit_log_login_session_uniq
+  on audit_log (session_id)
+  where action = 'login' and session_id is not null;

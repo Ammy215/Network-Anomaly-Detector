@@ -11,10 +11,11 @@ export function AuthProvider({ children }) {
   const [sessionChecked, setSessionChecked] = useState(false)
 
   useEffect(() => {
-    // onAuthStateChange fires 'SIGNED_IN' for an actual sign-in in this
-    // tab (not for a session merely restored from storage on page load,
-    // which fires 'INITIAL_SESSION' instead) -- that distinction is what
-    // lets the login-event audit call fire only on real logins.
+    // 'SIGNED_IN' does NOT mean a real sign-in happened: supabase-js also
+    // fires it when a stored session is recovered on every tab refocus,
+    // and re-broadcasts it to every other open tab. So the login-event
+    // call below may run many times per sign-in -- the backend records
+    // only the first per Supabase session (see log_login, docs/MONITORING.md).
     const { data: subscription } = supabase.auth.onAuthStateChange((event, newSession) => {
       setSession(newSession)
       setSessionChecked(true)

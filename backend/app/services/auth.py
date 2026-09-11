@@ -7,7 +7,7 @@ from functools import lru_cache
 import jwt
 from fastapi import Depends, HTTPException, Request
 from jwt import PyJWKClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.services import rate_limit, supabase_client
@@ -19,6 +19,10 @@ class CurrentUser(BaseModel):
     id: str
     email: str
     role: str
+    # The token's session_id claim: one per real sign-in, stable across
+    # refreshes and tabs. Server-side bookkeeping only -- excluded from any
+    # response that returns this model (e.g. /api/auth/me).
+    session_id: str | None = Field(default=None, exclude=True)
 
 
 def _project_url() -> str:
@@ -132,7 +136,13 @@ def user_from_raw_token(token: str) -> CurrentUser:
             detail="No profile found for this account. Sign-up may not have completed correctly.",
         )
 
-    return CurrentUser(id=user_id, email=email, role=profile["role"])
+    session_id = payload.get("session_id")
+    return CurrentUser(
+        id=user_id,
+        email=email,
+        role=profile["role"],
+        session_id=session_id if isinstance(session_id, str) and session_id else None,
+    )
 
 
 def get_current_user(request: Request) -> CurrentUser:
@@ -234,3 +244,33 @@ def log_audit(
             "AUDIT GAP -- failed to record action=%s by user=%s: %s",
             action, current_user.email, exc,
         )
+
+
+def log_login(request: Request, current_user: CurrentUser) -> bool:
+    """Record a login once per Supabase auth session. Returns whether this
+    call wrote the row.
+
+    The frontend can't tell a real sign-in from a session being recovered:
+    supabase-js emits SIGNED_IN for both (on every tab refocus, and again
+    in every other open tab). So the client may call this many times per
+    sign-in and the server decides -- which also means a client can no
+    longer inflate the audit log just by calling the endpoint in a loop.
+
+    A token without a session_id falls back to recording un-deduplicated,
+    as before this change: a surplus row is recoverable, a silently missing
+    login is not. Best-effort, like log_audit.
+    """
+    if not current_user.session_id:
+        logger.warning("Login token has no session_id claim; recording without dedupe")
+        log_audit(request, current_user, "login")
+        return True
+    try:
+        return supabase_client.insert_login_event(
+            user_id=current_user.id,
+            user_email=current_user.email,
+            session_id=current_user.session_id,
+            ip_address=client_ip(request),
+        )
+    except Exception as exc:
+        logger.warning("AUDIT GAP -- failed to record login by user=%s: %s", current_user.email, exc)
+        return False

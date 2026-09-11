@@ -786,6 +786,37 @@ def insert_audit_log(
     return result.data[0] if result.data else row
 
 
+def insert_login_event(
+    user_id: str,
+    user_email: str,
+    session_id: str,
+    ip_address: str | None,
+) -> bool:
+    """One login row per Supabase auth session. True if this call recorded
+    it, False if the session's login was already recorded.
+
+    The partial unique index audit_log_login_session_uniq is the dedupe --
+    not a lookup here -- because duplicate calls arrive concurrently (from
+    several tabs within milliseconds), and only the database can order
+    those. Any error other than that unique violation still raises.
+    """
+    row = {
+        "user_id": user_id,
+        "user_email": user_email,
+        "action": "login",
+        "detail": None,
+        "ip_address": ip_address,
+        "session_id": session_id,
+    }
+    try:
+        get_client().table(AUDIT_LOG_TABLE).insert(row).execute()
+    except Exception as exc:
+        if _is_duplicate_key_error(exc):
+            return False
+        raise
+    return True
+
+
 def list_audit_log(limit: int = 200, offset: int = 0) -> list[dict]:
     result = (
         get_client()
