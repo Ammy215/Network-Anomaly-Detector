@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,11 +8,14 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.routers import admin, auth, capture, enrichment, integrations, investigate, models, pcap, rag, verdicts
+from app.services import supabase_client
+from app.services.ml.scoring import resolve_artifact_path
 
 # Nothing previously configured a level, so the root logger defaulted to
 # WARNING and every netsentinel.* logger.info() call (scoring, pcap,
 # enrichment) was silently dropped -- not just new to this phase.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+logger = logging.getLogger("netsentinel.health")
 
 
 class _RedactQueryTokenFilter(logging.Filter):
@@ -117,4 +121,48 @@ app.include_router(integrations.router)
 
 @app.get("/api/health")
 def health():
+    """Liveness only: the process is up. Touches nothing, deliberately --
+    Render's own health checker calls this every ~5s, so it must stay free.
+    """
     return {"status": "ok"}
+
+
+# How long a readiness result is reused. /ready is unauthenticated and does
+# a real database round-trip, so without this anyone could turn it into a
+# free Supabase-query generator; the external monitor only calls it hourly.
+READY_CACHE_SECONDS = 30
+_ready_cache: dict = {"at": None, "ok": False}
+
+
+def _check_ready() -> bool:
+    try:
+        version = supabase_client.get_active_model_version()
+    except Exception as exc:
+        logger.warning("Readiness: database check failed: %s: %s", type(exc).__name__, exc)
+        return False
+    if not version or not version.get("artifact_path"):
+        logger.warning("Readiness: no active model version")
+        return False
+    if not resolve_artifact_path(version["artifact_path"]).exists():
+        logger.warning("Readiness: active model artifact missing on disk")
+        return False
+    return True
+
+
+@app.get("/api/health/ready")
+def ready():
+    """Readiness: can this instance do its actual job -- reach the database
+    and score with the shipped model? That catches what /api/health cannot:
+    a paused Supabase project, a bad key, or a deploy missing the model
+    artifact (all of which leave the process happily "up").
+
+    The response is only ok/degraded, never which check failed -- that
+    detail goes to the server log. An unauthenticated endpoint shouldn't
+    describe the backend's internals to whoever asks.
+    """
+    now = time.monotonic()
+    if _ready_cache["at"] is None or now - _ready_cache["at"] >= READY_CACHE_SECONDS:
+        _ready_cache.update(at=now, ok=_check_ready())
+    if _ready_cache["ok"]:
+        return {"status": "ok"}
+    return JSONResponse(status_code=503, content={"status": "degraded"})

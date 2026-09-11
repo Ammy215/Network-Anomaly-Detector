@@ -38,27 +38,37 @@ class ModelBundle:
     threshold: float
 
 
+def resolve_artifact_path(artifact_path: str) -> Path:
+    """Where a model_versions row's artifact actually lives on this machine.
+
+    `artifact_path` is read from the row exactly as train_models.py wrote
+    it -- if that run happened on Windows, it's a backslash-separated
+    string. Backslash is not a path separator on POSIX, so Path() on Linux
+    treats the whole thing as one filename and silently never finds the
+    real file (a production Docker container is always Linux, no matter
+    what OS trained the model) -- normalizing before constructing the Path
+    makes this work on both.
+
+    Shared by load_bundle and the readiness check, so the health endpoint
+    can never disagree with scoring about where the artifact is.
+    """
+    normalized = artifact_path.replace("\\", "/")
+    path = Path(normalized)
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parents[3] / normalized
+    return path
+
+
 def load_bundle(artifact_path: str) -> ModelBundle | None:
     """Loads a persisted bundle. Returns None if the artifact is missing.
 
     Artifacts are git-ignored binaries, so a fresh clone won't have them
     until train_models.py runs. Callers degrade gracefully rather than
     crashing -- an unscored flow is acceptable, a 500 on upload is not.
-
-    `artifact_path` is read from the model_versions row exactly as
-    train_models.py wrote it -- if that run happened on Windows, it's a
-    backslash-separated string. Backslash is not a path separator on
-    POSIX, so Path() on Linux treats the whole thing as one filename and
-    silently never finds the real file (a production Docker container is
-    always Linux, no matter what OS trained the model) -- normalizing
-    before constructing the Path makes this work on both.
     """
     import joblib
 
-    normalized = artifact_path.replace("\\", "/")
-    path = Path(normalized)
-    if not path.is_absolute():
-        path = Path(__file__).resolve().parents[3] / normalized
+    path = resolve_artifact_path(artifact_path)
     if not path.exists():
         logger.warning("Model artifact not found at %s -- flows will be unscored", path)
         return None
