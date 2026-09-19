@@ -1,0 +1,73 @@
+name: Supabase keep-alive
+
+# Supabase pauses a Free-plan project after ~7 days without database activity,
+# and a paused project takes the whole app down. The backend's hourly
+# /api/health/ready check already makes a real query -- but it only counts if
+# the request reaches the backend at all. On 2026-09-12 Render began failing to
+# wake the free instance (503, `x-render-routing: hibernate-wake-error`, in
+# under a second), so the hourly ping never reached FastAPI, no query ran, and
+# the project was paused seven days later.
+#
+# This workflow queries Supabase DIRECTLY, so Render is no longer in the chain:
+# a Render outage can never again starve the database into pausing.
+
+on:
+  schedule:
+    # Every 2 days, at an odd minute. Deliberately not weekly: GitHub "can be
+    # delayed during periods of high load" and may drop queued scheduled runs,
+    # so the cadence has to survive a missed run inside Supabase's 7-day window.
+    # Off-the-hour because the top of the hour is GitHub's worst congestion.
+    - cron: "17 6 */2 * *"
+  # Lets you run it by hand from the Actions tab -- use this to verify the
+  # secrets are right, rather than waiting two days to find out.
+  workflow_dispatch:
+
+# This job only makes an outbound HTTPS request; it never needs the repo.
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+
+          # A real PostgREST read against a real table -- this is what counts as
+          # "user database activity". Deliberately NOT /auth/v1/health: that one
+          # answers 200 with no key at all because it just reports GoTrue's
+          # version, so it would be a keep-alive that silently does nothing.
+          # Read-only, one row, no writes and no schema of its own to maintain.
+          status=$(curl -sS -o response.json -w '%{http_code}' --max-time 30 \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            "${SUPABASE_URL}/rest/v1/model_versions?select=id&limit=1")
+
+          # Fail loudly. A keep-alive that fails quietly is worse than none:
+          # you'd believe the database was being kept awake right up until the
+          # pause email. Supabase error bodies carry a code and hint, never the
+          # key (and GitHub masks secrets in logs regardless).
+          # `|| true` on the body dump: a connection-level failure (empty
+          # SUPABASE_URL, DNS, timeout) leaves no response file at all, and
+          # under `set -e` a bare `cat` would abort with its own error before
+          # this message printed. The job still fails either way; this just
+          # keeps the reason readable.
+          if [ "$status" != "200" ]; then
+            echo "FAILED: Supabase answered HTTP $status"
+            cat response.json 2>/dev/null || true
+            exit 1
+          fi
+
+          # 200 with zero rows would still be real database activity, but it
+          # means the table this points at has moved or been emptied -- surface
+          # that now rather than letting the check rot into a no-op.
+          if ! grep -q '"id"' response.json; then
+            echo "FAILED: HTTP 200 but no rows -- does model_versions still exist?"
+            cat response.json 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "OK: Supabase answered HTTP 200 with a row."
