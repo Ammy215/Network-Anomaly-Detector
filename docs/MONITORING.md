@@ -10,7 +10,8 @@ live deployment unless it is explicitly marked as an estimate.
 | Signal | Who calls it | How often | What it proves |
 |---|---|---|---|
 | `GET /api/health` | Render's internal health checker (direct, bypasses Cloudflare) | every ~5s | The process is up. Touches nothing — must stay free to call. |
-| `GET /api/health/ready` | UptimeRobot (external, through Cloudflare) | every 60 min | The app can do its job: database reachable, a model is active, and its artifact exists on disk. `200 {"status":"ok"}` or `503 {"status":"degraded"}`. |
+| `GET /api/health/ready` | GitHub Actions (`.github/workflows/backend-wake.yml`) | every 6 hours | The app can do its job: database reachable, a model is active, and its artifact exists on disk. `200 {"status":"ok"}` or `503 {"status":"degraded"}`. Also wakes the instance. |
+| `GET /rest/v1/model_versions` | GitHub Actions (`.github/workflows/supabase-keepalive.yml`) | every 2 days | Supabase sees real database activity, so the free project is never paused. Queries Supabase directly, never through Render. |
 | `TIMING` log lines | the backend itself, every request | continuous | Server-side time per endpoint, as deployed (see below). |
 
 **Why two health endpoints.** A process can be "up" while the app is broken:
@@ -20,13 +21,52 @@ Render's checker deliberately stays on `/api/health` — if it pointed at
 `/ready`, a Supabase outage would make Render restart a perfectly healthy
 process.
 
-**UptimeRobot configuration (free plan):** HTTP monitor on `/api/health/ready`,
-60-minute interval, **request timeout 60s** (the maximum; the default 30s is
-shorter than a ~43s cold start and would alert on every sleepy-hour check),
-email alerts. The free plan **only sends `HEAD`** — choosing the method is a
-paid feature — so `/ready` accepts `HEAD` as well as `GET`. Before that
-change it answered `HEAD` with `405`, which would have read as "down" on
-every check.
+**Why not UptimeRobot (it was tried, and cannot work here).** The monitor was
+removed on 19 Sep 2026 after it reported NetSentinel "down" for 7 days while
+the site served real visitors normally. The cause is not a timeout or a
+method: **Render refuses to wake a hibernated free instance for a known
+uptime-monitor User-Agent.** Measured one second apart, same method, same
+endpoint, only the User-Agent differing:
+
+```
+UptimeRobot UA  07:35:24Z -> 503 in 0.71s   x-render-routing: hibernate-wake-error
+curl UA         07:35:25Z -> 200 in 33.89s  (woke normally)
+UptimeRobot UA  07:35:59Z -> 200 in 0.72s   (served fine, once already awake)
+```
+
+The block applies only to the *wake* path — once the instance is up, the same
+agent is served normally. That leaves no usable setting, because Render spins
+an idle instance down after 15 minutes:
+
+- **Ping faster than 15 min** → the instance never sleeps, so no wake is ever
+  needed and the monitor works — at **~720 instance-hours/month**, which is
+  96% of the workspace's 750-hour allowance for one service.
+- **Ping slower than 15 min** → every check lands on a hibernated instance the
+  monitor is not permitted to wake → a permanent false "down", and no
+  monitoring signal at all.
+
+There is no middle setting, so UptimeRobot was replaced rather than retuned.
+The sibling honeypot project keeps its own service warm at a 5-minute
+interval and its monitor works for exactly this reason — it never hibernates,
+so the wake path is never exercised.
+
+**What replaced it:** `.github/workflows/backend-wake.yml`, every 6 hours,
+a plain `curl` (which Render does wake for) against `/api/health/ready`, with
+a 90s timeout and 3 attempts 30s apart. It deliberately sets **no**
+User-Agent — adding a monitoring one would recreate the bug above, which is
+noted in the workflow itself. Each wake keeps the instance up ~15 minutes, so
+it costs about **1 h/day (~30 h/month)**.
+
+`/ready` still accepts `HEAD` as well as `GET` (`b848ccc`). That was added for
+UptimeRobot's free plan, which only sends `HEAD`; it is no longer load-bearing
+but is harmless and keeps the endpoint usable by any checker.
+
+**Verified against a hibernated instance**, which is the only path that
+matters: the workflow's own script woke the service and returned
+`200 {"status":"ok"}` in **43.8s on the first attempt**. The failure path was
+checked separately against an unreachable host — three attempts, then `exit 1`,
+surfacing Render's `x-render-routing` header so "the app is broken" and
+"Render would not start the container" stay distinguishable in the run log.
 
 **What `/ready` does not say.** It never reports *which* check failed —
 that goes to the server log (`netsentinel.health`). It is unauthenticated,
@@ -41,24 +81,64 @@ request waits for the container to boot:
 | Measurement | Result |
 |---|---|
 | Cold `/api/health` (two separate occasions) | **42.7s**, **42.9s** to first byte, then HTTP 200 |
+| Cold `/api/health/ready` (19 Sep, four separate wakes) | **33.7s**, **33.9s**, **42.8s**, **43.8s** |
 | Warm `/api/health` / `/api/health/ready` | ~0.3–0.8s from India (mostly network) |
 
 A non-browser client gets a real, delayed `200` — not a Render loading page —
-so the uptime monitor records cold starts as slow successes, **provided its
-timeout is longer than ~43s.** A shorter timeout turns every hourly check
-into a false "down" alert.
+so a checker records cold starts as slow successes, **provided its timeout is
+longer than the wake.** The measured spread is **33.7–43.8s** across six
+wakes, and the slowest was the most recent — which is why `backend-wake.yml`
+allows **90s** rather than trimming to the observed maximum. A 60s timeout
+would have passed every one of these, but with under 17s of headroom on the
+worst; the earlier UptimeRobot monitor's default 30s would have failed all of
+them outright.
 
 `/api/health` touches nothing, so those ~43s are container start plus Python
 imports (scikit-learn, Chroma, the ONNX embedding model). That's the likely
 lever if cold start ever needs shortening — not yet measured in detail.
 
-**Why hourly, not every 5 minutes.** A 5-minute pinger would keep the
+**Why every 6 hours, not every 5 minutes.** A 5-minute pinger would keep the
 instance awake permanently: ~720–744 of the workspace's 750 free
-instance-hours a month, and exhausting them suspends *every* free service
-in the workspace. Hourly checks cost roughly a quarter-hour of uptime each
-(≈ 180–200h/month), and — as a side effect — keep the Supabase free project
-above its 7-day inactivity pause. The trade-off is accepted: a real visitor
-after an idle spell still waits ~43s.
+instance-hours a month, and exhausting them suspends *every* free service in
+the workspace — not just this one. Six-hourly checks cost roughly a
+quarter-hour of uptime each, ≈ **30 h/month**. The trade-off is accepted: a
+real visitor after an idle spell still waits ~43s.
+
+**Keeping Supabase alive is a separate job now, deliberately.** It used to be
+a side effect of this ping, which turned out to be a single point of failure:
+when Render stopped waking the instance on 12 Sep 2026, the health check never
+reached the backend, so no database query ran, and Supabase paused the project
+seven days later for inactivity. `supabase-keepalive.yml` queries Supabase
+directly, so a Render outage can no longer starve the database.
+
+## Incident: 7 days of false "down" alerts (12–19 Sep 2026)
+
+UptimeRobot reported the backend down continuously for 6d 21h, confirmed from
+four of its regions. **The site was serving real visitors fine throughout** —
+the monitor was reporting its own inability to wake a hibernated instance, not
+an outage. Worth recording because every individual signal looked like a real
+failure:
+
+- Render's **Events** log showed nothing at all across the whole window: no
+  suspension, no failed deploy, no restart. The last deploy before it ran
+  clean for ~22 hours first.
+- `/api/health` kept returning `200` to Render's own internal checker, because
+  that only runs while the instance is up.
+- A browser `GET` woke the service and returned `200` in 42.8s on demand.
+
+**The real damage was second-order.** The backend's health check was also what
+kept Supabase active. With every check failing at Render's router, no database
+query ran for 8 days and **Supabase paused the project** for inactivity — a
+genuine outage caused by a monitoring failure, not by either service being
+unhealthy. Hence `supabase-keepalive.yml` querying Supabase directly.
+
+**Diagnostic lesson, stated plainly:** three successive theories fitted the
+evidence and were wrong — a quota suspension (Render logs those, and usage was
+~400h of 750 at the time), a bad deploy (it had run fine for a day), and a
+broken health endpoint (it answered correctly when awake). What settled it was
+a controlled A/B: same method, same endpoint, one second apart, only the
+User-Agent changed. **When several plausible causes survive the evidence, the
+next step is an experiment that isolates one variable — not another theory.**
 
 ## Real client IPs in the audit log
 
