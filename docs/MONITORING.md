@@ -134,11 +134,61 @@ unhealthy. Hence `supabase-keepalive.yml` querying Supabase directly.
 
 **Diagnostic lesson, stated plainly:** three successive theories fitted the
 evidence and were wrong — a quota suspension (Render logs those, and usage was
-~400h of 750 at the time), a bad deploy (it had run fine for a day), and a
+*estimated* at ~400h of 750 at the time — extrapolated from a month-to-date
+average, which the next section shows is not a steady rate), a bad deploy (it had run fine for a day), and a
 broken health endpoint (it answered correctly when awake). What settled it was
 a controlled A/B: same method, same endpoint, one second apart, only the
 User-Agent changed. **When several plausible causes survive the evidence, the
 next step is an experiment that isolates one variable — not another theory.**
+
+## Workspace instance-hours (measured, 19 Sep 2026)
+
+Render gives the whole workspace **750 free instance-hours a month**, shared by
+every free web service in it. A spun-down service consumes none; when the pool
+runs out, Render suspends *all* the workspace's free services — including this
+one — until the 1st. The dashboard shows only the workspace total (Billing →
+Monthly Included Usage), never a per-service breakdown.
+
+**Measured burn rate: ~15–20 h/day, not 48 h/day.**
+
+| Reading | When (UTC, 19 Sep) | Free instance hours |
+|---|---|---|
+| 1 | ~06:38 — taken between 06:25 and 06:52; the exact time was not recorded | 635.07 |
+| 2 | ~12:28 | 640.05 |
+
+The delta is 4.98 h over ~5.85 h ≈ **20 h/day**. About 1.5 h of that was this
+service being woken five times by the diagnostic testing itself, so the rate
+attributable to the other services is closer to **15 h/day**.
+
+**The 48 h/day figure was wrong, and why.** It assumed the honeypot and
+metadata-analyzer services were running 24/7, inferred from both answering in
+under a second at 07:20. A sub-second reply only proves a service was awake *at
+that instant*. By 12:30 both were asleep: the honeypot took **32.8 s** to wake,
+and the metadata analyzer did not answer within **90 s**. Read one snapshot as a
+steady state and the projection is off by 2–3×.
+
+| Assumption | Rate | Reaches 750 h (110 h left) |
+|---|---|---|
+| Two services always-on (the wrong model) | 48 h/day | ~21 Sep |
+| Measured, including test wakes | ~20 h/day | ~24 Sep |
+| Measured, excluding test wakes | ~15 h/day | ~26 Sep |
+| Services wake only for their own monitors | ~2 h/day | not before the 1 Oct reset |
+
+What decides which row is real is what wakes the *other* services besides their
+monitors. One candidate, from reading that project's code and not confirmed:
+its frontend sends a heartbeat every 2 minutes, which would hold the backend
+awake for as long as anyone leaves that app open in a browser tab.
+
+**Method note for the next reading:** record the exact time with every reading.
+The largest error above is not knowing when reading 1 was taken; two
+timestamped readings give a rate directly with no estimating.
+
+**Also on 19 Sep:** the NetSentinel UptimeRobot monitor was deleted. The first
+manual run of `backend-wake.yml` (12:25) succeeded, its wake step taking 44 s —
+a real cold start from a GitHub runner. The 12:23 *scheduled* run did not fire;
+GitHub documents that scheduled runs can be delayed or dropped, which is why
+`supabase-keepalive.yml` runs every 2 days rather than weekly. The metadata
+analyzer not answering within 90 s is undiagnosed and belongs to that project.
 
 ## Real client IPs in the audit log
 
