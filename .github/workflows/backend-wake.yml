@@ -1,0 +1,75 @@
+name: Backend wake + health check
+
+# Replaces the UptimeRobot monitor, which could not work at any useful setting.
+#
+# Measured on 2026-09-19, one second apart, same method and endpoint, only the
+# User-Agent differing:
+#   UptimeRobot UA -> 503 in 0.71s   (x-render-routing: hibernate-wake-error)
+#   curl UA        -> 200 in 33.89s  (woke normally)
+#   UptimeRobot UA -> 200 in 0.72s   once the service was already awake
+#
+# So Render refuses to WAKE a hibernated free instance for a known uptime-monitor
+# agent, while serving it fine once awake. That left no working setting: pinging
+# faster than Render's 15-minute spin-down keeps the service awake (and costs
+# ~720 instance-hours/month), and pinging slower means every check lands on a
+# hibernated instance the monitor is not allowed to wake -- reporting a false
+# "down" forever, which is exactly what it did for 7 days.
+#
+# A plain curl from Actions is not blocked, so this both wakes the service and
+# reports honestly. Deliberately does NOT set a monitoring User-Agent.
+
+on:
+  schedule:
+    # Every 6 hours. Each wake keeps the instance up ~15 min, so this costs
+    # about 1 h/day (~30 h/month) of the workspace's 750 free instance-hours.
+    # Off-the-hour: GitHub delays scheduled runs most at the top of the hour.
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the backend and check readiness
+        run: |
+          set -uo pipefail
+          URL=https://netsentinel-backend-t4wd.onrender.com/api/health/ready
+
+          # /api/health/ready, not /api/health: readiness runs a real Supabase
+          # query and confirms the active model's artifact is on disk, so a 200
+          # means the app can actually do its job -- not merely that the process
+          # is up. Its result is cached 30s server-side, far below this cadence.
+          #
+          # A cold start was measured at 33-43s, so the timeout is 90s: long
+          # enough for a slow wake, short enough to fail rather than hang.
+          # Three attempts, because a single transient wake failure should not
+          # page anyone -- but three in a row is a real outage.
+          for attempt in 1 2 3; do
+            echo "attempt $attempt at $(date -u +%T)Z"
+            # time_total alongside the code: a ~35-45s success is a cold start,
+            # sub-second means it was already awake. Logging it turns each run
+            # into a datapoint on how long waking actually takes.
+            result=$(curl -sS -D headers.txt -o response.json \
+                      -w '%{http_code} %{time_total}s' --max-time 90 "$URL" \
+                      || echo "000 timeout")
+            status=${result% *}
+            took=${result#* }
+
+            if [ "$status" = "200" ]; then
+              echo "OK: HTTP $status in $took  $(cat response.json 2>/dev/null)"
+              exit 0
+            fi
+
+            echo "  got HTTP $status after $took"
+            # Render names this failure explicitly; surfacing it makes the
+            # difference between "the app is broken" and "Render would not
+            # start the container" visible in the run log.
+            grep -i 'x-render-routing' headers.txt 2>/dev/null || true
+            cat response.json 2>/dev/null || true
+            [ "$attempt" -lt 3 ] && sleep 30
+          done
+
+          echo "FAILED: backend did not return 200 after 3 attempts"
+          exit 1
