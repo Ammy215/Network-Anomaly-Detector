@@ -11,7 +11,7 @@ live deployment unless it is explicitly marked as an estimate.
 |---|---|---|---|
 | `GET /api/health` | Render's internal health checker (direct, bypasses Cloudflare) | every ~5s | The process is up. Touches nothing — must stay free to call. |
 | `GET /api/health/ready` | GitHub Actions (`.github/workflows/backend-wake.yml`) | every 6 hours | The app can do its job: database reachable, a model is active, and its artifact exists on disk. `200 {"status":"ok"}` or `503 {"status":"degraded"}`. Also wakes the instance. |
-| `GET /rest/v1/model_versions` | GitHub Actions (`.github/workflows/supabase-keepalive.yml`) | every 2 days | Supabase sees real database activity, so the free project is never paused. Queries Supabase directly, never through Render. |
+| `GET /rest/v1/model_versions` | GitHub Actions (`.github/workflows/supabase-keepalive.yml`) | daily | Supabase sees real database activity, so the free project is never paused. Queries Supabase directly, never through Render. |
 | `TIMING` log lines | the backend itself, every request | continuous | Server-side time per endpoint, as deployed (see below). |
 
 **Why two health endpoints.** A process can be "up" while the app is broken:
@@ -186,9 +186,15 @@ timestamped readings give a rate directly with no estimating.
 **Also on 19 Sep:** the NetSentinel UptimeRobot monitor was deleted. The first
 manual run of `backend-wake.yml` (12:25) succeeded, its wake step taking 44 s —
 a real cold start from a GitHub runner. The 12:23 *scheduled* run did not fire;
-GitHub documents that scheduled runs can be delayed or dropped, which is why
-`supabase-keepalive.yml` runs every 2 days rather than weekly. The metadata
+GitHub documents that scheduled runs can be delayed or dropped. The metadata
 analyzer not answering within 90 s is undiagnosed and belongs to that project.
+
+**23 Sep — keep-alive tightened to daily.** Over 19–23 Sep, `backend-wake.yml`
+fired all 14 of its scheduled runs (6-hourly, gaps ≤ ~9 h — jitter, never a
+miss). `supabase-keepalive.yml` on `*/2` fired **once** (21 Sep); the 23 Sep
+run never appeared — not late, not queued. Supabase was still live (last
+activity 21 Sep), but at a 2-day interval one dropped run uses a third of the
+7-day pause window. Daily leaves room for five consecutive drops.
 
 ## Real client IPs in the audit log
 

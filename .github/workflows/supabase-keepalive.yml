@@ -13,13 +13,16 @@ name: Supabase keep-alive
 
 on:
   schedule:
-    # Every 2 days, at an odd minute. Deliberately not weekly: GitHub "can be
-    # delayed during periods of high load" and may drop queued scheduled runs,
-    # so the cadence has to survive a missed run inside Supabase's 7-day window.
+    # Daily, at an odd minute. Was every 2 days, tightened after the */2 cron
+    # ran only once in 4 days (2026-09-19 to 2026-09-23) instead of the
+    # expected ~2 -- GitHub "can be delayed during periods of high load" and
+    # may drop queued scheduled runs, and at a 2-day interval a single drop is
+    # already a third of the slack before Supabase's 7-day pause window.
+    # Daily leaves five silently-dropped runs of margin instead of two.
     # Off-the-hour because the top of the hour is GitHub's worst congestion.
-    - cron: "17 6 */2 * *"
+    - cron: "17 6 * * *"
   # Lets you run it by hand from the Actions tab -- use this to verify the
-  # secrets are right, rather than waiting two days to find out.
+  # secrets are right, rather than waiting a day to find out.
   workflow_dispatch:
 
 # This job only makes an outbound HTTPS request; it never needs the repo.
